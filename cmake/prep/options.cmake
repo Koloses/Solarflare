@@ -18,6 +18,11 @@ option(SUNSHINE_CONFIGURE_ONLY "Configure special files only, then exit." OFF)
 
 option(SUNSHINE_ENABLE_TRAY "Enable system tray icon." ON)
 
+# PyroWave GPU wavelet codec (vendored, Vulkan). On by default.
+# NOTE: requires Vulkan headers, Python 3 and glslangValidator at build time.
+# Turn OFF with -DSUNSHINE_ENABLE_PYROWAVE=OFF if those are unavailable.
+option(SUNSHINE_ENABLE_PYROWAVE "Enable the vendored PyroWave Vulkan codec." ON)
+
 option(SUNSHINE_SYSTEM_VULKAN_HEADERS "Use system installation of vulkan-headers rather than the submodule." OFF)
 option(SUNSHINE_SYSTEM_WAYLAND_PROTOCOLS "Use system installation of wayland-protocols rather than the submodule." OFF)
 

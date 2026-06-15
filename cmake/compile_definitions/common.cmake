@@ -57,6 +57,13 @@ include_directories(BEFORE SYSTEM "${CMAKE_SOURCE_DIR}/third-party/nv-codec-head
 file(GLOB NVENC_SOURCES CONFIGURE_DEPENDS "src/nvenc/*.cpp" "src/nvenc/*.h")
 list(APPEND PLATFORM_TARGET_FILES ${NVENC_SOURCES})
 
+# PyroWave codec integration sources (Vulkan context + encode device). Only
+# compiled when the codec is enabled; links against the vendored `pyrowave` lib.
+if(SUNSHINE_ENABLE_PYROWAVE)
+    file(GLOB PYROWAVE_INTEGRATION_SOURCES CONFIGURE_DEPENDS "src/pyrowave/*.cpp" "src/pyrowave/*.h")
+    list(APPEND PLATFORM_TARGET_FILES ${PYROWAVE_INTEGRATION_SOURCES})
+endif()
+
 set(SUNSHINE_TARGET_FILES
         "${CMAKE_SOURCE_DIR}/third-party/moonlight-common-c/src/Input.h"
         "${CMAKE_SOURCE_DIR}/third-party/moonlight-common-c/src/Rtsp.h"
@@ -165,4 +172,11 @@ if(SUNSHINE_ENABLE_TRAY)
 else()
     set(SUNSHINE_TRAY 0)
     message(STATUS "Tray icon disabled")
+endif()
+
+# PyroWave GPU wavelet codec (vendored)
+if(SUNSHINE_ENABLE_PYROWAVE)
+    list(APPEND SUNSHINE_EXTERNAL_LIBRARIES pyrowave)
+    list(APPEND SUNSHINE_DEFINITIONS SUNSHINE_ENABLE_PYROWAVE=1)
+    message(STATUS "PyroWave codec enabled")
 endif()
