@@ -31,6 +31,11 @@ extern "C" {
 #include "sync.h"
 #include "video.h"
 
+#ifdef SUNSHINE_ENABLE_PYROWAVE
+  #include "pyrowave/pyrowave_encode.h"
+  #include "pyrowave/pyrowave_vk.h"
+#endif
+
 #ifdef _WIN32
 extern "C" {
   #include <libavutil/hwcontext_d3d11va.h>
@@ -427,6 +432,35 @@ namespace video {
     std::unique_ptr<platf::nvenc_encode_device_t> device;
     bool force_idr = false;
   };
+
+#ifdef SUNSHINE_ENABLE_PYROWAVE
+  // Session wrapper for the PyroWave codec. Mirrors nvenc_encode_session_t: a
+  // non-avcodec session that produces one generic packet per frame. PyroWave is
+  // intra-only, so IDR/ref-invalidation requests are no-ops.
+  class pyrowave_encode_session_t: public encode_session_t {
+  public:
+    explicit pyrowave_encode_session_t(std::unique_ptr<pyrowave_enc::pyrowave_encode_device_t> encode_device):
+        device(std::move(encode_device)) {
+    }
+
+    int convert(platf::img_t &img) override {
+      return device ? device->convert(img) : -1;
+    }
+
+    void request_idr_frame() override {}
+
+    void request_normal_frame() override {}
+
+    void invalidate_ref_frames(int64_t first_frame, int64_t last_frame) override {}
+
+    pyrowave_enc::encoded_frame encode_frame(int64_t frame_index) {
+      return device ? device->encode_frame(frame_index) : pyrowave_enc::encoded_frame {};
+    }
+
+  private:
+    std::unique_ptr<pyrowave_enc::pyrowave_encode_device_t> device;
+  };
+#endif
 
   struct sync_session_ctx_t {
     safe::signal_t *join_event;
@@ -957,6 +991,43 @@ namespace video {
     H264_ONLY | PARALLEL_ENCODING | ALWAYS_REPROBE | YUV444_SUPPORT
   };
 
+#ifdef SUNSHINE_ENABLE_PYROWAVE
+  // PyroWave Vulkan wavelet codec. Captures into system memory (CPU BGRA) like
+  // the software encoder; the pix formats below only drive display/capture setup
+  // and are otherwise ignored — the PyroWave encode device consumes the raw
+  // img_t. Only the `pyrowave` codec_t slot (videoFormat 3) is meaningful.
+  encoder_t pyrowave {
+    "pyrowave"sv,
+    std::make_unique<encoder_platform_formats_avcodec>(
+// Zero-copy capture: request the VRAM (Vulkan mem_type) capture path so the
+// display delivers a DRM-PRIME dma-buf (egl::img_descriptor_t) that the PyroWave
+// encode device imports directly into its own Vulkan device - no system-memory
+// roundtrip. The nullptr init function below means no ffmpeg hwframe context is
+// created; our make_encode_device interception builds the PyroWave device instead.
+#if defined(SUNSHINE_BUILD_VULKAN)
+      AV_HWDEVICE_TYPE_VULKAN,
+#else
+      AV_HWDEVICE_TYPE_NONE,
+#endif
+      AV_HWDEVICE_TYPE_NONE,
+      AV_PIX_FMT_NONE,
+      AV_PIX_FMT_YUV420P,
+      AV_PIX_FMT_YUV420P10,
+      AV_PIX_FMT_YUV444P,
+      AV_PIX_FMT_YUV444P10,
+      nullptr
+    ),
+    {},  // av1 codec_t (unused)
+    {},  // hevc codec_t (unused)
+    {},  // h264 codec_t (unused)
+    0,  // flags: sync encode path, no parallel/ref-invalidation
+    {
+      {}, {}, {}, {}, {}, {},  // option lists (unused: not an avcodec encoder)
+      "pyrowave"s,
+    },  // pyrowave codec_t (declared after `flags`)
+  };
+#endif
+
 #if defined(__linux__) || defined(linux) || defined(__linux) || defined(__FreeBSD__)
   encoder_t vaapi {
     "vaapi"sv,
@@ -1183,6 +1254,9 @@ namespace video {
   static encoder_t *chosen_encoder;
   int active_hevc_mode;
   int active_av1_mode;
+  // PyroWave codec mode: 0 = auto, 1 = unsupported/disabled, 2 = supported (8-bit 4:2:0).
+  // Resolved during encoder probing (Milestone 2) once a PyroWave encoder is registered.
+  int active_pyrowave_mode = 0;
   bool last_encoder_probe_supported_ref_frames_invalidation = false;
   std::array<bool, 3> last_encoder_probe_supported_yuv444_for_codec = {};
 
@@ -1605,12 +1679,34 @@ namespace video {
     return 0;
   }
 
+#ifdef SUNSHINE_ENABLE_PYROWAVE
+  int encode_pyrowave(int64_t frame_nr, pyrowave_encode_session_t &session, safe::mail_raw_t::queue_t<packet_t> &packets, void *channel_data, std::optional<std::chrono::steady_clock::time_point> frame_timestamp) {
+    auto encoded_frame = session.encode_frame(frame_nr);
+    if (encoded_frame.data.empty()) {
+      BOOST_LOG(error) << "PyroWave returned empty packet";
+      return -1;
+    }
+
+    auto packet = std::make_unique<packet_raw_generic>(std::move(encoded_frame.data), encoded_frame.frame_index, encoded_frame.idr);
+    packet->channel_data = channel_data;
+    packet->frame_timestamp = frame_timestamp;
+    packets->raise(std::move(packet));
+
+    return 0;
+  }
+#endif
+
   int encode(int64_t frame_nr, encode_session_t &session, safe::mail_raw_t::queue_t<packet_t> &packets, void *channel_data, std::optional<std::chrono::steady_clock::time_point> frame_timestamp) {
     if (auto avcodec_session = dynamic_cast<avcodec_encode_session_t *>(&session)) {
       return encode_avcodec(frame_nr, *avcodec_session, packets, channel_data, frame_timestamp);
     } else if (auto nvenc_session = dynamic_cast<nvenc_encode_session_t *>(&session)) {
       return encode_nvenc(frame_nr, *nvenc_session, packets, channel_data, frame_timestamp);
     }
+#ifdef SUNSHINE_ENABLE_PYROWAVE
+    else if (auto pyrowave_session = dynamic_cast<pyrowave_encode_session_t *>(&session)) {
+      return encode_pyrowave(frame_nr, *pyrowave_session, packets, channel_data, frame_timestamp);
+    }
+#endif
 
     return -1;
   }
@@ -2015,6 +2111,12 @@ namespace video {
       auto nvenc_encode_device = boost::dynamic_pointer_cast<platf::nvenc_encode_device_t>(std::move(encode_device));
       return make_nvenc_encode_session(config, std::move(nvenc_encode_device));
     }
+#ifdef SUNSHINE_ENABLE_PYROWAVE
+    else if (dynamic_cast<pyrowave_enc::pyrowave_encode_device_t *>(encode_device.get())) {
+      auto pyrowave_device = boost::dynamic_pointer_cast<pyrowave_enc::pyrowave_encode_device_t>(std::move(encode_device));
+      return std::make_unique<pyrowave_encode_session_t>(std::move(pyrowave_device));
+    }
+#endif
 
     return nullptr;
   }
@@ -2180,6 +2282,30 @@ namespace video {
 
     auto colorspace = colorspace_from_client_config(config, disp.is_hdr());
 
+#ifdef SUNSHINE_ENABLE_PYROWAVE
+    // PyroWave path: build a Vulkan-backed encode device that consumes the raw
+    // system-memory img_t. Bypasses the avcodec/nvenc display device factories.
+    if (config.videoFormat == 3) {
+      auto ctx = pyrowave_vk::context::create();
+      if (!ctx) {
+        BOOST_LOG(error) << "pyrowave: failed to create Vulkan context";
+        return {};
+      }
+      // Encode at the NEGOTIATED stream resolution (config), not the physical
+      // display size. The client's decoder is set up for config.width x config.height;
+      // encoding at the display size produces a mismatched bitstream that the decoder
+      // rejects (endless IDR requests -> black screen). The capture frame (display
+      // size) is scaled down to config in upload_image().
+      auto dev = pyrowave_enc::pyrowave_encode_device_t::create(
+        std::move(ctx), config.width, config.height, config.bitrate * 1000LL, config.framerate, colorspace);
+      if (dev) {
+        result = std::move(dev);
+        result->colorspace = colorspace;
+      }
+      return result;
+    }
+#endif
+
     platf::pix_fmt_e pix_fmt;
     if (config.chromaSamplingType == 1) {
       // YUV 4:4:4
@@ -2272,8 +2398,6 @@ namespace video {
     std::vector<std::string> &display_names,
     int &display_p
   ) {
-    const auto &encoder = *chosen_encoder;
-
     std::shared_ptr<platf::display_t> disp;
 
     auto switch_display_event = mail::man->event<int>(mail::switch_display);
@@ -2286,6 +2410,17 @@ namespace video {
 
       synced_session_ctxs.emplace_back(std::make_unique<sync_session_ctx_t>(std::move(*ctx)));
     }
+
+    // Select the encoder. PyroWave (videoFormat 3) is a separate encoder from the
+    // globally chosen H.264/HEVC/AV1 hardware encoder; substitute it here so the
+    // display is set up for its (system-memory) capture path.
+    const encoder_t *encoder_ptr = chosen_encoder;
+#ifdef SUNSHINE_ENABLE_PYROWAVE
+    if (synced_session_ctxs.front()->config.videoFormat == 3 && active_pyrowave_mode >= 2) {
+      encoder_ptr = &pyrowave;
+    }
+#endif
+    const auto &encoder = *encoder_ptr;
 
     while (encode_session_ctx_queue.running()) {
       // Refresh display names since a display removal might have caused the reinitialization
@@ -2814,6 +2949,29 @@ namespace video {
     active_av1_mode = config::video.av1_mode;
     last_encoder_probe_supported_ref_frames_invalidation = false;
 
+#ifdef SUNSHINE_ENABLE_PYROWAVE
+    // If PyroWave is explicitly requested (force_pyrowave or encoder=="pyrowave"),
+    // select it up front and skip probing the standard avcodec/nvenc encoders
+    // entirely. Those probes can hard-crash on hardware lacking H.264 support
+    // (e.g. ffmpeg's h264_vulkan on the AMD BC-250), so they must not run when
+    // PyroWave is the goal.
+    if (config::video.force_pyrowave || config::video.encoder == "pyrowave") {
+      auto ctx = pyrowave_vk::context::create();
+      active_pyrowave_mode = ctx ? 2 : 1;
+      pyrowave.pyrowave[encoder_t::PASSED] = (bool) ctx;
+      if (active_pyrowave_mode >= 2) {
+        BOOST_LOG(info) << "PyroWave requested; selecting it and skipping standard encoder probing";
+        chosen_encoder = &pyrowave;
+        active_hevc_mode = 1;  // no encoder for these codecs in this mode
+        active_av1_mode = 1;
+        last_encoder_probe_supported_yuv444_for_codec = {false, false, false};
+        return 0;
+      }
+      BOOST_LOG(error) << "PyroWave requested but its Vulkan context is unavailable; "
+                          "falling through to standard encoder probing";
+    }
+#endif
+
     auto adjust_encoder_constraints = [&](encoder_t *encoder) {
       // If we can't satisfy both the encoder and codec requirement, prefer the encoder over codec support
       if (active_hevc_mode == 3 && !encoder->hevc[encoder_t::DYNAMIC_RANGE]) {
@@ -2916,6 +3074,27 @@ namespace video {
       });
     }
 
+#ifdef SUNSHINE_ENABLE_PYROWAVE
+    // Last-resort fallback: if no standard (avcodec/nvenc) encoder validated -
+    // e.g. the device cannot encode H.264 at all - but PyroWave is available,
+    // stream via PyroWave instead of failing startup. PyroWave is self-contained
+    // (its own Vulkan path) and does not depend on the H.264 baseline. Only
+    // PyroWave-capable clients can connect in this mode.
+    if (chosen_encoder == nullptr) {
+      if (active_pyrowave_mode == 0) {
+        auto ctx = pyrowave_vk::context::create();
+        active_pyrowave_mode = ctx ? 2 : 1;
+        pyrowave.pyrowave[encoder_t::PASSED] = (bool) ctx;
+      }
+      if (active_pyrowave_mode >= 2) {
+        BOOST_LOG(warning) << "No standard encoder available; falling back to PyroWave-only streaming";
+        chosen_encoder = &pyrowave;
+        active_hevc_mode = 1;  // no encoder for these codecs
+        active_av1_mode = 1;
+      }
+    }
+#endif
+
     if (chosen_encoder == nullptr) {
       const auto output_name {display_device::map_output_name(config::video.output_name)};
       BOOST_LOG(fatal) << "Unable to find display or encoder during startup."sv;
@@ -2978,6 +3157,30 @@ namespace video {
     if (active_av1_mode == 0) {
       active_av1_mode = encoder.av1[encoder_t::PASSED] ? (encoder.av1[encoder_t::DYNAMIC_RANGE] ? 3 : 2) : 1;
     }
+
+#ifdef SUNSHINE_ENABLE_PYROWAVE
+    // PyroWave probe: independent of the avcodec/nvenc encoder above. It is
+    // supported (mode 2, 8-bit 4:2:0) iff we can create its Vulkan context.
+    if (active_pyrowave_mode == 0) {
+      auto ctx = pyrowave_vk::context::create();
+      active_pyrowave_mode = ctx ? 2 : 1;
+      BOOST_LOG(info) << "PyroWave codec: " << (ctx ? "supported" : "unavailable");
+      pyrowave.pyrowave[encoder_t::PASSED] = (bool) ctx;
+    }
+
+    // "Force PyroWave" advertises PyroWave as the only codec: suppress the HEVC
+    // and AV1 SDP markers so PyroWave-capable clients are pushed onto it. (H.264
+    // remains the protocol's mandatory baseline for clients that lack PyroWave.)
+    if (config::video.force_pyrowave) {
+      if (active_pyrowave_mode >= 2) {
+        BOOST_LOG(info) << "force_pyrowave enabled: advertising PyroWave only";
+        active_hevc_mode = 1;
+        active_av1_mode = 1;
+      } else {
+        BOOST_LOG(warning) << "force_pyrowave enabled but PyroWave is unavailable; ignoring";
+      }
+    }
+#endif
 
     return 0;
   }

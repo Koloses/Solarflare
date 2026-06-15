@@ -201,10 +201,17 @@ namespace video {
           return hevc;
         case 2:
           return av1;
+        case 3:
+          return pyrowave;
       }
     }
 
     uint32_t flags;
+
+    // Declared AFTER `flags` so existing positional aggregate initializers for
+    // the other encoders (which end at `flags`) remain valid; `pyrowave` then
+    // default-initializes for them. The PyroWave encoder sets it explicitly.
+    codec_t pyrowave;
   };
 
   struct encode_session_t {
@@ -221,6 +228,10 @@ namespace video {
 
   // encoders
   extern encoder_t software;
+
+#ifdef SUNSHINE_ENABLE_PYROWAVE
+  extern encoder_t pyrowave;  // PyroWave Vulkan wavelet codec (system-memory capture)
+#endif
 
 #if !defined(__APPLE__)
   extern encoder_t nvenc;  // available for windows and linux
@@ -343,6 +354,7 @@ namespace video {
 
   extern int active_hevc_mode;
   extern int active_av1_mode;
+  extern int active_pyrowave_mode;
   extern bool last_encoder_probe_supported_ref_frames_invalidation;
   extern std::array<bool, 3> last_encoder_probe_supported_yuv444_for_codec;  // 0 - H.264, 1 - HEVC, 2 - AV1
 

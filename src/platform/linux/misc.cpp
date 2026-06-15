@@ -1138,14 +1138,30 @@ namespace platf {
   }
 
   std::unique_ptr<deinit_t> init() {
-    // enable low latency mode for AMD
-    // https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/30039
-    set_env("AMD_DEBUG", "lowlatencyenc");
+    // The AMD_DEBUG / RADV_PERFTEST / RADV_EXPERIMENTAL knobs below only matter for
+    // the ffmpeg Vulkan video-ENCODE path (h264/hevc/av1_vulkan). PyroWave is a pure
+    // compute codec and does not use Vulkan video encode at all. On experimental GPUs
+    // (e.g. gfx1013 / BC-250) these RADV debug/experimental flags destabilise the
+    // driver and can fault basic calls like vkCreateDescriptorPool, so skip them
+    // entirely when PyroWave is the active encoder.
+    bool using_pyrowave = config::video.force_pyrowave || config::video.encoder == "pyrowave";
+    if (using_pyrowave) {
+      BOOST_LOG(info) << "pyrowave: skipping AMD_DEBUG/RADV_PERFTEST/RADV_EXPERIMENTAL video-encode env (not needed for compute codec)"sv;
+      // gfx1013 (BC-250) RADV has a buggy hierarchical-Z; RADV_DEBUG=nohiz disables it
+      // and fixes graphics glitches. Ensure it is set for our process regardless of
+      // whether /etc/environment propagated (append so any existing flags are kept).
+      append_env("RADV_DEBUG", "nohiz", ",");
+      BOOST_LOG(info) << "pyrowave: RADV_DEBUG=" << (std::getenv("RADV_DEBUG") ? std::getenv("RADV_DEBUG") : "(unset)");
+    } else {
+      // enable low latency mode for AMD
+      // https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/30039
+      set_env("AMD_DEBUG", "lowlatencyenc");
 
-    // enable Vulkan video extensions for AMD RADV
-    set_env("RADV_PERFTEST", "video_encode");
-    // Above is deprecated on Mesa 26.1+ and replaced by (keep both to ensure best compatibility):
-    append_env("RADV_EXPERIMENTAL", "video_encode", ",");
+      // enable Vulkan video extensions for AMD RADV
+      set_env("RADV_PERFTEST", "video_encode");
+      // Above is deprecated on Mesa 26.1+ and replaced by (keep both to ensure best compatibility):
+      append_env("RADV_EXPERIMENTAL", "video_encode", ",");
+    }
 
     // These are allowed to fail.
     gbm::init();
