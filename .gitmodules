@@ -31,8 +31,8 @@
 	branch = master
 [submodule "third-party/moonlight-common-c"]
 	path = third-party/moonlight-common-c
-	url = https://github.com/moonlight-stream/moonlight-common-c.git
-	branch = master
+	url = https://github.com/Koloses/moonlight-common-c
+	branch = sunshine
 [submodule "third-party/nanors"]
 	path = third-party/nanors
 	url = https://github.com/sleepybishop/nanors.git
