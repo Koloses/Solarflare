@@ -155,6 +155,8 @@
     "av1_mode_2": "Sunshine will advertise support for AV1 Main 8-bit profile",
     "av1_mode_3": "Sunshine will advertise support for AV1 Main 8-bit and 10-bit (HDR) profiles",
     "av1_mode_desc": "Allows the client to request AV1 Main 8-bit or 10-bit video streams. AV1 is more CPU-intensive to encode, so enabling this may reduce performance when using software encoding.",
+    "force_pyrowave": "Force PyroWave codec",
+    "force_pyrowave_desc": "Advertise only the PyroWave codec to clients, suppressing H.264, HEVC and AV1 so that PyroWave-capable clients are forced to use it. Requires a Sunshine build with PyroWave enabled and a compatible client; clients without PyroWave support will fall back to H.264. Intended for testing.",
     "back_button_timeout": "Home/Guide Button Emulation Timeout",
     "back_button_timeout_desc": "If the Back/Select button is held down for the specified number of milliseconds, a Home/Guide button press is emulated. If set to a value < 0 (default), holding the Back/Select button will not emulate the Home/Guide button.",
     "bind_address": "Bind address",

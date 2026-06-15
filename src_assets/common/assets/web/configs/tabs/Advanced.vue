@@ -1,6 +1,7 @@
 <script setup>
 import { ref } from 'vue'
 import PlatformLayout from '../../PlatformLayout.vue'
+import Checkbox from '../../Checkbox.vue'
 
 const props = defineProps([
   'platform',
@@ -57,6 +58,14 @@ const config = ref(props.config)
       </select>
       <div class="form-text">{{ $t('config.av1_mode_desc') }}</div>
     </div>
+
+    <!-- Force PyroWave codec -->
+    <Checkbox class="mb-3"
+              id="force_pyrowave"
+              locale-prefix="config"
+              v-model="config.force_pyrowave"
+              default="false"
+    ></Checkbox>
 
     <!-- Capture -->
     <div class="mb-3" v-if="platform !== 'macos'">
