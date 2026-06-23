@@ -356,6 +356,24 @@ namespace video {
   extern int active_av1_mode;
   extern int active_pyrowave_mode;
   extern bool last_encoder_probe_supported_ref_frames_invalidation;
+
+  // --- PyroWave phase-offset pacing (mirrors pyrofling) ---
+  // The client reports a phase offset (microseconds); positive => slow the capture cadence
+  // slightly, negative => speed up. Offsets accumulate (summed) until the capture loop
+  // consumes them once per frame. Submit is called from the control-message handler.
+  void phase_pacing_submit(int offset_us);
+  int phase_pacing_consume();  // returns the accumulated offset and resets to 0
+  // One pacing step for a capture loop using a sleep-until-next_frame scheduler. Adjusts
+  // `delay` (the per-frame interval) and `next_frame` (the next deadline) toward the
+  // client's requested phase using pyrofling's controller (deadband 200us, step +/-2,
+  // clamp +/-50, respond_factor 60, fraction = base_delay/10000). `tick_interval_offset`
+  // is per-loop controller state (start at 0). No-op when offset_us is 0 except a gentle
+  // recenter of `delay` back toward base_delay.
+  void phase_pacing_step(int offset_us,
+                         int &tick_interval_offset,
+                         std::chrono::nanoseconds base_delay,
+                         std::chrono::nanoseconds &delay,
+                         std::chrono::steady_clock::time_point &next_frame);
   extern std::array<bool, 3> last_encoder_probe_supported_yuv444_for_codec;  // 0 - H.264, 1 - HEVC, 2 - AV1
 
   void capture(

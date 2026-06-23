@@ -1258,6 +1258,73 @@ namespace video {
   // Resolved during encoder probing (Milestone 2) once a PyroWave encoder is registered.
   int active_pyrowave_mode = 0;
   bool last_encoder_probe_supported_ref_frames_invalidation = false;
+
+  // --- PyroWave phase-offset pacing (mirrors pyrofling's set/get_phase_offset + update_loop) ---
+  static std::atomic<int> phase_offset_accum_us {0};
+
+  void phase_pacing_submit(int offset_us) {
+    // Accumulate (only the sign of the sum drives the bang-bang controller). Clamp so the
+    // value can't grow unbounded if the active capture backend doesn't consume it (e.g. a
+    // non-KMS capture path that isn't wired for pacing).
+    int prev = phase_offset_accum_us.load(std::memory_order_relaxed);
+    int next;
+    do {
+      next = prev + offset_us;
+      if (next > 1000000) next = 1000000;
+      if (next < -1000000) next = -1000000;
+    } while (!phase_offset_accum_us.compare_exchange_weak(prev, next, std::memory_order_relaxed));
+  }
+
+  int phase_pacing_consume() {
+    return phase_offset_accum_us.exchange(0, std::memory_order_relaxed);
+  }
+
+  void phase_pacing_step(int offset_us,
+                         int &tick_interval_offset,
+                         std::chrono::nanoseconds base_delay,
+                         std::chrono::nanoseconds &delay,
+                         std::chrono::steady_clock::time_point &next_frame) {
+    using namespace std::chrono;
+    // pyrofling constants: fraction = timebase/10000, deadband 200us, respond_factor 60,
+    // step +/-2, clamp +/-50, recenter +/-1.
+    const auto fraction = base_delay / 10000;
+    if (fraction.count() <= 0) {
+      return;
+    }
+    constexpr int respond_factor = 60;
+
+    if (offset_us > 200 || offset_us < -200) {
+      if (offset_us > 0 && tick_interval_offset < 50) {
+        // Client wants frames delivered later -> slow down (longer interval, push deadline out).
+        tick_interval_offset += 2;
+        next_frame += respond_factor * fraction;
+        delay += 2 * fraction;
+      }
+      else if (offset_us < 0 && tick_interval_offset > -50) {
+        // Client wants frames sooner -> speed up.
+        tick_interval_offset -= 2;
+        next_frame -= respond_factor * fraction;
+        delay -= 2 * fraction;
+      }
+    }
+
+    // Drift back toward the nominal interval when no correction is pulling us away.
+    if (tick_interval_offset > 0) {
+      tick_interval_offset--;
+      delay -= fraction;
+    }
+    else if (tick_interval_offset < 0) {
+      tick_interval_offset++;
+      delay += fraction;
+    }
+
+    // Defensive clamp so a feedback gap can never run the interval away (pyrofling's loop is
+    // closed so this never triggers in steady state; recenter returns delay to base anyway).
+    const auto lo = base_delay / 2;
+    const auto hi = base_delay * 2;
+    if (delay < lo) delay = lo;
+    if (delay > hi) delay = hi;
+  }
   std::array<bool, 3> last_encoder_probe_supported_yuv444_for_codec = {};
 
   void reset_display(std::shared_ptr<platf::display_t> &disp, const platf::mem_type_e &type, const std::string &display_name, const config_t &config) {

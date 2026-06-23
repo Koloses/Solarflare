@@ -50,6 +50,10 @@ constexpr int IDX_SET_MOTION_EVENT = 13;
 constexpr int IDX_SET_RGB_LED = 14;
 constexpr int IDX_SET_ADAPTIVE_TRIGGERS = 15;
 
+// PyroWave phase-offset pacing hint (client -> host, Sunshine extension). Payload is a
+// little-endian int32 of microseconds. Mirrors pyrofling's PYRO_MESSAGE_PHASE_OFFSET.
+constexpr short SS_PHASE_OFFSET_PTYPE = 0x5510;
+
 static const short packetTypes[] = {
   0x0305,  // Start A
   0x0307,  // Start B
@@ -953,6 +957,17 @@ namespace stream {
       BOOST_LOG(debug) << "type [IDX_REQUEST_IDR_FRAME]"sv;
 
       session->video.idr_events->raise(true);
+    });
+
+    // PyroWave phase-offset pacing: the client reports how far each frame's arrival is from
+    // its ideal display phase; feed it to the capture loop's cadence controller (pyrofling).
+    server->map(SS_PHASE_OFFSET_PTYPE, [](session_t *session, const std::string_view &payload) {
+      if (payload.size() < sizeof(int32_t)) {
+        return;
+      }
+      int32_t offset_us;
+      std::memcpy(&offset_us, payload.data(), sizeof(offset_us));  // little-endian on both ends
+      video::phase_pacing_submit(offset_us);
     });
 
     server->map(packetTypes[IDX_INVALIDATE_REF_FRAMES], [&](session_t *session, const std::string_view &payload) {

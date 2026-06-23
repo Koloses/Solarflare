@@ -1195,6 +1195,12 @@ namespace platf {
       capture_e capture(const push_captured_image_cb_t &push_captured_image_cb, const pull_free_image_cb_t &pull_free_image_cb, bool *cursor) override {
         auto next_frame = std::chrono::steady_clock::now();
 
+        // PyroWave phase-offset pacing state. base_delay is the nominal frame interval;
+        // the client's phase hints gently nudge `delay`/`next_frame` around it (pyrofling).
+        // Inert for codecs/clients that don't send phase offsets (consume() returns 0).
+        const auto base_delay = delay;
+        int tick_interval_offset = 0;
+
         sleep_overshoot_logger.reset();
 
         while (true) {
@@ -1205,6 +1211,8 @@ namespace platf {
             sleep_overshoot_logger.first_point(next_frame);
             sleep_overshoot_logger.second_point_now_and_log();
           }
+
+          video::phase_pacing_step(video::phase_pacing_consume(), tick_interval_offset, base_delay, delay, next_frame);
 
           next_frame += delay;
           if (next_frame < now) {  // some major slowdown happened; we couldn't keep up
