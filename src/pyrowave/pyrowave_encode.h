@@ -136,6 +136,12 @@ namespace pyrowave_enc {
     int quality_bias_ = 0;
     PyroWave::ChromaSubsampling chroma_ = PyroWave::ChromaSubsampling::Chroma420;
     bool capture_cursor_ = true;  ///< composite the hardware cursor into the frame
+    // HDR10 stream (10-bit BT.2020 + PQ): the wavelet codec itself is
+    // bit-depth agnostic; HDR means 16-bit unorm planes (10-bit precision),
+    // BT.2020-NCL YCbCr math in rgb2yuv, and BT.2020/PQ flags in the
+    // sequence header. Requires the zero-copy capture path (the 10-bit
+    // scanout buffer arrives as an AR30/AB30 dma-buf).
+    bool hdr_ = false;
 
     // Adaptive bitrate (client opt-in): every full-refresh request marks
     // unrecoverable loss, so back the encode bitrate off multiplicatively

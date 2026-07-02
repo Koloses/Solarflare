@@ -46,13 +46,15 @@ namespace pyrowave_enc {
       float cursor_x, cursor_y;   // normalized over the source frame (top-down)
       float cursor_w, cursor_h;
       int32_t chroma444;          // 1 = full-resolution chroma planes
+      int32_t hdr;                // 1 = BT.2020-NCL matrix over PQ-encoded input
     };
 
-    // Create a single-plane R8 image usable as sampled + storage + transfer dst.
-    image_allocation make_r8_image(vk::raii::Device &device, uint32_t w, uint32_t h, const char *name) {
+    // Create a single-plane image usable as sampled + storage + transfer dst.
+    // R8 for SDR; R16 unorm for HDR (10-bit content, headroom in 16 bits).
+    image_allocation make_plane_image(vk::raii::Device &device, uint32_t w, uint32_t h, vk::Format format, const char *name) {
       vk::ImageCreateInfo info {
         .imageType = vk::ImageType::e2D,
-        .format = vk::Format::eR8Unorm,
+        .format = format,
         .extent = {.width = w, .height = h, .depth = 1},
         .mipLevels = 1,
         .arrayLayers = 1,
@@ -62,11 +64,11 @@ namespace pyrowave_enc {
       return image_allocation(device, info, {.usage = VMA_MEMORY_USAGE_AUTO}, name);
     }
 
-    vk::raii::ImageView make_view(vk::raii::Device &device, vk::Image img) {
+    vk::raii::ImageView make_view(vk::raii::Device &device, vk::Image img, vk::Format format) {
       return device.createImageView(vk::ImageViewCreateInfo {
         .image = img,
         .viewType = vk::ImageViewType::e2D,
-        .format = vk::Format::eR8Unorm,
+        .format = format,
         .subresourceRange = {.aspectMask = vk::ImageAspectFlagBits::eColor, .levelCount = 1, .layerCount = 1},
       });
     }
@@ -155,6 +157,7 @@ namespace pyrowave_enc {
     self->refresh_interval_ = std::clamp(refresh_interval, 0, 255);
     self->chroma_ = chroma444 ? PyroWave::ChromaSubsampling::Chroma444 : PyroWave::ChromaSubsampling::Chroma420;
     self->capture_cursor_ = config::video.pyrowave_capture_cursor;
+    self->hdr_ = colorspace.bit_depth == 10 && colorspace.colorspace == video::colorspace_e::bt2020;
     self->adaptive_bitrate_ = adaptive_bitrate;
     if (!self->init(width, height, bitrate_bps, std::max(1, fps))) {
       return nullptr;
@@ -177,17 +180,18 @@ namespace pyrowave_enc {
       block_hashes_.assign(size_t(enc_->block_count_32x32), kHashNever);
       BOOST_LOG(info) << "pyrowave: Encoder created";
 
-      // Three R8 plane images (Y full-res; Cb/Cr half-res for 4:2:0 or
-      // full-res for 4:4:4).
+      // Three plane images (Y full-res; Cb/Cr half-res for 4:2:0 or full-res
+      // for 4:4:4). R8 for SDR, R16 unorm for HDR (10-bit content).
       const bool is444 = chroma_ == PyroWave::ChromaSubsampling::Chroma444;
+      const vk::Format plane_format = hdr_ ? vk::Format::eR16Unorm : vk::Format::eR8Unorm;
       uint32_t cw = is444 ? uint32_t(width) : (uint32_t(width) + 1) / 2;
       uint32_t ch = is444 ? uint32_t(height) : (uint32_t(height) + 1) / 2;
-      img_y_ = make_r8_image(device, width, height, "pyrowave Y");
-      img_cb_ = make_r8_image(device, cw, ch, "pyrowave Cb");
-      img_cr_ = make_r8_image(device, cw, ch, "pyrowave Cr");
-      view_y_ = make_view(device, img_y_);
-      view_cb_ = make_view(device, img_cb_);
-      view_cr_ = make_view(device, img_cr_);
+      img_y_ = make_plane_image(device, width, height, plane_format, "pyrowave Y");
+      img_cb_ = make_plane_image(device, cw, ch, plane_format, "pyrowave Cb");
+      img_cr_ = make_plane_image(device, cw, ch, plane_format, "pyrowave Cr");
+      view_y_ = make_view(device, img_y_, plane_format);
+      view_cb_ = make_view(device, img_cb_, plane_format);
+      view_cr_ = make_view(device, img_cr_, plane_format);
 
       size_t meta_size = enc_->get_meta_required_size();
       meta_buf_ = make_host_buffer(device, meta_size,
@@ -291,6 +295,7 @@ namespace pyrowave_enc {
                       << " refresh_interval=" << refresh_interval_
                       << " shard_payload=" << shard_payload_size_
                       << " chroma=" << (chroma_ == PyroWave::ChromaSubsampling::Chroma444 ? "444" : "420")
+                      << " hdr=" << hdr_
                       << " capture_cursor=" << capture_cursor_
                       << " adaptive_bitrate=" << adaptive_bitrate_
                       << " fp16_math=" << (std::getenv("PYROWAVE_NO_FP16_MATH") ? "OFF(forced fp32)" : "on");
@@ -548,7 +553,8 @@ namespace pyrowave_enc {
       cmd_.bindDescriptorSets(vk::PipelineBindPoint::eCompute, *conv_pl_, 0, *conv_dset_, {});
       ConvPush push {(int32_t) width_, (int32_t) height_, 1.0f / float(width_), 1.0f / float(height_),
                      flip_y, have_cursor, cur_x, cur_y, cur_w, cur_h,
-                     chroma_ == PyroWave::ChromaSubsampling::Chroma444 ? 1 : 0};
+                     chroma_ == PyroWave::ChromaSubsampling::Chroma444 ? 1 : 0,
+                     hdr_ ? 1 : 0};
       cmd_.pushConstants<ConvPush>(*conv_pl_, vk::ShaderStageFlagBits::eCompute, 0, push);
       cmd_.dispatch((width_ + 7) / 8, (height_ + 7) / 8, 1);
 
@@ -844,6 +850,11 @@ namespace pyrowave_enc {
       shdr.chroma_resolution = chroma_ == PyroWave::ChromaSubsampling::Chroma444
                                  ? PyroWave::CHROMA_RESOLUTION_444
                                  : PyroWave::CHROMA_RESOLUTION_420;
+      // Colorimetry (informational: the client also knows from negotiation).
+      shdr.color_primaries = hdr_ ? PyroWave::COLOR_PRIMARIES_BT2020 : PyroWave::COLOR_PRIMARIES_BT709;
+      shdr.transfer_function = hdr_ ? PyroWave::TRANSFER_FUNCTION_PQ : PyroWave::TRANSFER_FUNCTION_BT709;
+      shdr.ycbcr_transform = hdr_ ? PyroWave::YCBCR_TRANSFORM_BT2020 : PyroWave::YCBCR_TRANSFORM_BT709;
+      shdr.ycbcr_range = PyroWave::YCBCR_RANGE_LIMITED;
       append_record(&shdr, sizeof(shdr));
 
       for (int i = 0; i < block_count; ++i) {

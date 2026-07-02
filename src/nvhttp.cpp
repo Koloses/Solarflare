@@ -764,12 +764,15 @@ namespace nvhttp {
       }
     }
     if (video::active_pyrowave_mode >= 2) {
-      // The PyroWave encoder handles 4:4:4 unconditionally (compute codec).
-      codec_mode_flags |= SCM_PYROWAVE | SCM_PYROWAVE_444;
+      // The PyroWave encoder handles 4:4:4 and 10-bit HDR unconditionally
+      // (compute codec; the wavelet transform is bit-depth agnostic). Actual
+      // HDR streaming is still gated on the client requesting it and the
+      // display being in HDR mode.
+      codec_mode_flags |= SCM_PYROWAVE | SCM_PYROWAVE_444 | SCM_PYROWAVE_HDR10 | SCM_PYROWAVE_HDR10_444;
     }
     // When forcing PyroWave, report only it so clients don't fall back to other codecs.
     if (config::video.force_pyrowave && video::active_pyrowave_mode >= 2) {
-      codec_mode_flags = SCM_PYROWAVE | SCM_PYROWAVE_444;
+      codec_mode_flags = SCM_PYROWAVE | SCM_PYROWAVE_444 | SCM_PYROWAVE_HDR10 | SCM_PYROWAVE_HDR10_444;
     }
     tree.put("root.ServerCodecModeSupport", codec_mode_flags);
 

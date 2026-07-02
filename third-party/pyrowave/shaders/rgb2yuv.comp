@@ -17,9 +17,11 @@ layout(local_size_x = 8, local_size_y = 8) in;
 
 layout(set = 0, binding = 0) uniform texture2D SrcImg;        // source frame (sampled .rgb == R,G,B)
 layout(set = 0, binding = 1) uniform sampler   LinSamp;       // linear, clamp-to-edge
-layout(set = 0, binding = 2, r8) uniform writeonly image2D OutY;
-layout(set = 0, binding = 3, r8) uniform writeonly image2D OutCb;
-layout(set = 0, binding = 4, r8) uniform writeonly image2D OutCr;
+// Format-less: the planes are R8 (SDR) or R16 (HDR, 10-bit content); the
+// context enables shaderStorageImageWriteWithoutFormat unconditionally.
+layout(set = 0, binding = 2) uniform writeonly image2D OutY;
+layout(set = 0, binding = 3) uniform writeonly image2D OutCb;
+layout(set = 0, binding = 4) uniform writeonly image2D OutCr;
 layout(set = 0, binding = 5) uniform texture2D CursorImg;     // premultiplied-alpha RGBA cursor
 
 layout(push_constant) uniform Push {
@@ -30,11 +32,27 @@ layout(push_constant) uniform Push {
     vec2  cursor_xy;      // cursor top-left, normalized over the source (top-down)
     vec2  cursor_wh;      // cursor size, normalized over the source
     int   chroma444;      // 1 = full-resolution chroma (4:4:4), else 4:2:0
+    int   hdr;            // 1 = HDR10 input: BT.2020-NCL matrix over PQ-encoded RGB
 } pc;
 
-float toY (vec3 c) { return 16.0 / 255.0 + (0.1826 * c.r + 0.6142 * c.g + 0.0620 * c.b); }
-float toCb(vec3 c) { return 128.0 / 255.0 + (-0.1006 * c.r - 0.3386 * c.g + 0.4392 * c.b); }
-float toCr(vec3 c) { return 128.0 / 255.0 + (0.4392 * c.r - 0.3989 * c.g - 0.0403 * c.b); }
+// Limited-range YCbCr, matrix applied to the non-linear (gamma/PQ) components,
+// exactly like H.264/HEVC video. SDR: BT.709 coefficients; HDR10: BT.2020-NCL
+// over the PQ-encoded scanout values (PQ passes through untouched).
+float toY (vec3 c) {
+    return pc.hdr != 0
+        ? 16.0 / 255.0 + (0.2256 * c.r + 0.5823 * c.g + 0.0509 * c.b)
+        : 16.0 / 255.0 + (0.1826 * c.r + 0.6142 * c.g + 0.0620 * c.b);
+}
+float toCb(vec3 c) {
+    return pc.hdr != 0
+        ? 128.0 / 255.0 + (-0.1227 * c.r - 0.3166 * c.g + 0.4392 * c.b)
+        : 128.0 / 255.0 + (-0.1006 * c.r - 0.3386 * c.g + 0.4392 * c.b);
+}
+float toCr(vec3 c) {
+    return pc.hdr != 0
+        ? 128.0 / 255.0 + (0.4392 * c.r - 0.4039 * c.g - 0.0353 * c.b)
+        : 128.0 / 255.0 + (0.4392 * c.r - 0.3989 * c.g - 0.0403 * c.b);
+}
 
 // Sample the source at normalized uv (encode-space 0..1 over the source frame) and
 // composite the cursor over it. flip_y handles a bottom-up (GL) capture; the cursor
