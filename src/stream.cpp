@@ -1370,9 +1370,10 @@ namespace stream {
       // PyroWave: adapt FEC to observed loss. The client requests a full
       // refresh whenever a frame is unrecoverable, so the request rate is a
       // direct loss signal; boost decays back to the configured base when the
-      // link is clean.
+      // link is clean. Capped at 25% - beyond that the parity overhead costs
+      // more quality than the losses it recovers.
       if (session->config.monitor.videoFormat == 3) {
-        fecPercentage = std::min<decltype(fecPercentage)>(fecPercentage + video::pyrowave_fec_boost(), 50);
+        fecPercentage = std::min<decltype(fecPercentage)>(fecPercentage + video::pyrowave_fec_boost(), 25);
       }
 
       // Insert space for packet headers
