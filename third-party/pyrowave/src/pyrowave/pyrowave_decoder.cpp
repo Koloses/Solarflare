@@ -23,6 +23,9 @@ struct DequantizerPushData
 	int32_t output_layer;
 	int32_t block_offset_32x32;
 	int32_t block_stride_32x32;
+	// Fork extension (conditional replenishment): non-zero when absent blocks
+	// keep the previous frame's coefficients instead of decoding to zero.
+	int32_t keep_previous;
 };
 struct IDwtPushData
 {
@@ -305,12 +308,41 @@ void DecoderInput::clear()
 	header_size = 0;
 	packet_size = 0;
 	last_seq = UINT32_MAX;
+	skip_size = 0;
+	pending_block_index = UINT32_MAX;
+	// Default to keep-previous when no sequence header is seen: if the header
+	// chunk was lost, holding stale blocks is a more benign failure mode than
+	// zeroing them. A code-0 (full) sequence header switches this off.
+	keep_frame = true;
+}
+
+void DecoderInput::resync_at_packet_boundary()
+{
+	// Fork extension: the host aligns block packets to RTP payload boundaries,
+	// so every RTP payload starts a fresh record. If we are mid-record here,
+	// the previous payload was lost in transit - drop the partial record (its
+	// block stays unregistered, so it decodes as absent) and restart cleanly.
+	if (header_size == 0 && packet_size == 0 && skip_size == 0)
+		return;
+	header_size = 0;
+	packet_size = 0;
+	skip_size = 0;
+	pending_block_index = UINT32_MAX;
 }
 
 bool DecoderInput::push_data(std::span<const uint8_t> data)
 {
 	while (not data.empty())
 	{
+		// Fork extension: discard bytes of an in-band padding record.
+		if (skip_size)
+		{
+			size_t s = std::min(skip_size, data.size_bytes());
+			data = data.subspan(s);
+			skip_size -= s;
+			continue;
+		}
+
 		if (header_size < sizeof(BitstreamHeader))
 		{
 			size_t s = std::min(data.size_bytes(), sizeof(BitstreamHeader) - header_size);
@@ -320,6 +352,18 @@ bool DecoderInput::push_data(std::span<const uint8_t> data)
 
 			if (header_size < sizeof(BitstreamHeader))
 				break;
+
+			// Fork extension: padding record (magic + u32 word count). Skip it.
+			{
+				uint32_t header_words[2];
+				std::memcpy(header_words, &header, sizeof(header_words));
+				if (header_words[0] == BitstreamPaddingMagic)
+				{
+					skip_size = size_t(header_words[1]) * sizeof(uint32_t);
+					header_size = 0;
+					continue;
+				}
+			}
 
 			if (not header.extended)
 			{
@@ -351,18 +395,17 @@ bool DecoderInput::push_data(std::span<const uint8_t> data)
 					return false;
 				}
 
-				auto & offset = dequant_data[header.block_index];
-				if (offset == UINT32_MAX)
-				{
-					decoded_blocks++;
-					assert(payload_size % sizeof(uint32_t) == 0);
-					offset = payload_size / sizeof(uint32_t);
-				}
-				else
+				if (dequant_data[header.block_index] != UINT32_MAX)
 				{
 					std::cerr << "block_index " << header.block_index << " is already decoded, skipping." << std::endl;
 					return true;
 				}
+
+				// Defer registration until the whole block payload has arrived so a
+				// truncated stream (lost tail) can never register a partial block.
+				assert(payload_size % sizeof(uint32_t) == 0);
+				pending_block_index = header.block_index;
+				pending_offset_u32 = uint32_t(payload_size / sizeof(uint32_t));
 
 				push_raw(&header, sizeof(BitstreamHeader));
 				packet_size = header.payload_words * sizeof(uint32_t) - sizeof(BitstreamHeader);
@@ -394,7 +437,8 @@ bool DecoderInput::push_data(std::span<const uint8_t> data)
 				last_seq = header.sequence;
 			}
 
-			if (seq.code == BITSTREAM_EXTENDED_CODE_START_OF_FRAME)
+			if (seq.code == BITSTREAM_EXTENDED_CODE_START_OF_FRAME ||
+			    seq.code == BITSTREAM_EXTENDED_CODE_START_OF_FRAME_KEEP)
 			{
 				if (seq.width_minus_1 + 1 != decoder.width || seq.height_minus_1 + 1 != decoder.height)
 				{
@@ -403,6 +447,9 @@ bool DecoderInput::push_data(std::span<const uint8_t> data)
 				}
 
 				total_blocks_in_sequence = int(seq.total_blocks);
+				keep_frame = seq.code == BITSTREAM_EXTENDED_CODE_START_OF_FRAME_KEEP;
+				if (!keep_frame)
+					seen_full_frame = true;
 			}
 			else
 			{
@@ -418,7 +465,15 @@ bool DecoderInput::push_data(std::span<const uint8_t> data)
 			data = data.subspan(s);
 			packet_size -= s;
 			if (packet_size == 0)
+			{
 				header_size = 0;
+				if (pending_block_index != UINT32_MAX)
+				{
+					dequant_data[pending_block_index] = pending_offset_u32;
+					decoded_blocks++;
+					pending_block_index = UINT32_MAX;
+				}
+			}
 		}
 	}
 
@@ -1394,20 +1449,35 @@ Decoder::~Decoder()
 {
 }
 
-bool Decoder::dequant(vk::raii::CommandBuffer & cmd, size_t storage_mode)
+bool Decoder::dequant(vk::raii::CommandBuffer & cmd, size_t storage_mode, bool keep_previous)
 {
 	DequantizerPushData push = {};
+	push.keep_previous = keep_previous ? 1 : 0;
 
 	auto & p = dequant_[storage_mode];
 	cmd.bindPipeline(vk::PipelineBindPoint::eCompute, *p.pipeline);
 	begin_label(cmd, "DWT dequant");
 	// auto start_dequant = cmd.write_timestamp(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
 
+	// Keep-previous decoding (conditional replenishment) requires the wavelet
+	// images to retain their contents across frames, so after the first frame
+	// the transition must preserve (no eUndefined discard).
+	const auto prev_layout = wavelet_images_valid
+	        ? (fragment_path ? vk::ImageLayout::eShaderReadOnlyOptimal : vk::ImageLayout::eGeneral)
+	        : vk::ImageLayout::eUndefined;
+	const auto prev_access = wavelet_images_valid
+	        ? vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite
+	        : vk::AccessFlags{};
+	const auto prev_stage = (wavelet_images_valid && fragment_path)
+	        ? vk::PipelineStageFlagBits::eFragmentShader
+	        : vk::PipelineStageFlagBits::eComputeShader;
+	wavelet_images_valid = true;
+
 	std::array image_barrier{
 	        vk::ImageMemoryBarrier{
-	                .srcAccessMask = vk::AccessFlagBits::eNone,
+	                .srcAccessMask = prev_access,
 	                .dstAccessMask = vk::AccessFlagBits::eShaderWrite,
-	                .oldLayout = vk::ImageLayout::eUndefined,
+	                .oldLayout = prev_layout,
 	                .newLayout = vk::ImageLayout::eGeneral,
 	                .image = wavelet_img_high_res,
 	                .subresourceRange = {
@@ -1417,9 +1487,9 @@ bool Decoder::dequant(vk::raii::CommandBuffer & cmd, size_t storage_mode)
 	                },
 	        },
 	        vk::ImageMemoryBarrier{
-	                .srcAccessMask = vk::AccessFlagBits::eNone,
+	                .srcAccessMask = prev_access,
 	                .dstAccessMask = vk::AccessFlagBits::eShaderWrite,
-	                .oldLayout = vk::ImageLayout::eUndefined,
+	                .oldLayout = prev_layout,
 	                .newLayout = vk::ImageLayout::eGeneral,
 	                .image = wavelet_img_low_res,
 	                .subresourceRange = {
@@ -1433,7 +1503,7 @@ bool Decoder::dequant(vk::raii::CommandBuffer & cmd, size_t storage_mode)
 	if (wavelet_img_low_res)
 	{
 		cmd.pipelineBarrier(
-		        vk::PipelineStageFlagBits::eComputeShader,
+		        prev_stage,
 		        vk::PipelineStageFlagBits::eComputeShader,
 		        {},
 		        {},
@@ -1443,7 +1513,7 @@ bool Decoder::dequant(vk::raii::CommandBuffer & cmd, size_t storage_mode)
 	else
 	{
 		cmd.pipelineBarrier(
-		        vk::PipelineStageFlagBits::eComputeShader,
+		        prev_stage,
 		        vk::PipelineStageFlagBits::eComputeShader,
 		        {},
 		        {},
@@ -2165,7 +2235,7 @@ bool Decoder::decode(vk::raii::CommandBuffer & cmd, DecoderInput & input, const 
 	}
 	end_label(cmd);
 
-	if (!dequant(cmd, storage_mode))
+	if (!dequant(cmd, storage_mode, input.keep_previous_frame()))
 		return false;
 
 	vk::MemoryBarrier barrier{

@@ -456,6 +456,10 @@ namespace config {
     0,  // av1_mode
 
     false,  // force_pyrowave
+    1,  // pyrowave_precision
+    0,  // pyrowave_quality_bias
+    8,  // pyrowave_refresh_interval
+
 
     2,  // min_threads
     {
@@ -542,7 +546,9 @@ namespace config {
 
     APPS_JSON_PATH,
 
-    25,  // fecPercentage (raised from 20 to match pyrofling's ~25% for better loss recovery on lossy links)
+    10,  // fecPercentage (lowered from 25: PyroWave now heals losses via keep-previous
+         // decode + client refresh requests + rolling block refresh, so heavy FEC is
+         // wasted wire bandwidth; raise on very lossy links if needed)
 
     ENCRYPTION_MODE_NEVER,  // lan_encryption_mode
     ENCRYPTION_MODE_OPPORTUNISTIC,  // wan_encryption_mode
@@ -1104,6 +1110,9 @@ namespace config {
     int_between_f(vars, "hevc_mode", video.hevc_mode, {0, 3});
     int_between_f(vars, "av1_mode", video.av1_mode, {0, 3});
     bool_f(vars, "force_pyrowave", video.force_pyrowave);
+    int_between_f(vars, "pyrowave_precision", video.pyrowave_precision, {0, 2});
+    int_between_f(vars, "pyrowave_quality_bias", video.pyrowave_quality_bias, {0, 3});
+    int_between_f(vars, "pyrowave_refresh_interval", video.pyrowave_refresh_interval, {0, 255});
     int_f(vars, "min_threads", video.min_threads);
     string_f(vars, "sw_preset", video.sw.sw_preset);
     if (!video.sw.sw_preset.empty()) {

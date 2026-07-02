@@ -6,6 +6,7 @@
 #include <array>
 #include <atomic>
 #include <bitset>
+#include <cstdlib>
 #include <list>
 #include <thread>
 
@@ -28,6 +29,7 @@ extern "C" {
 #include "logging.h"
 #include "nvenc/nvenc_base.h"
 #include "platform/common.h"
+#include "stream.h"
 #include "sync.h"
 #include "video.h"
 
@@ -435,8 +437,10 @@ namespace video {
 
 #ifdef SUNSHINE_ENABLE_PYROWAVE
   // Session wrapper for the PyroWave codec. Mirrors nvenc_encode_session_t: a
-  // non-avcodec session that produces one generic packet per frame. PyroWave is
-  // intra-only, so IDR/ref-invalidation requests are no-ops.
+  // non-avcodec session that produces one generic packet per frame. With
+  // conditional replenishment an "IDR" maps to a full-refresh frame (all
+  // blocks re-sent), which the client requests after packet loss to heal
+  // stale keep-previous blocks.
   class pyrowave_encode_session_t: public encode_session_t {
   public:
     explicit pyrowave_encode_session_t(std::unique_ptr<pyrowave_enc::pyrowave_encode_device_t> encode_device):
@@ -447,11 +451,17 @@ namespace video {
       return device ? device->convert(img) : -1;
     }
 
-    void request_idr_frame() override {}
+    void request_idr_frame() override {
+      if (device) {
+        device->request_full_refresh();
+      }
+    }
 
     void request_normal_frame() override {}
 
-    void invalidate_ref_frames(int64_t first_frame, int64_t last_frame) override {}
+    void invalidate_ref_frames(int64_t first_frame, int64_t last_frame) override {
+      request_idr_frame();
+    }
 
     pyrowave_enc::encoded_frame encode_frame(int64_t frame_index) {
       return device ? device->encode_frame(frame_index) : pyrowave_enc::encoded_frame {};
@@ -2353,6 +2363,17 @@ namespace video {
     // PyroWave path: build a Vulkan-backed encode device that consumes the raw
     // system-memory img_t. Bypasses the avcodec/nvenc display device factories.
     if (config.videoFormat == 3) {
+      // Coefficient storage precision (0/1/2) is read by the codec's
+      // Configuration singleton on first use; publish the configured value
+      // before any encoder/context is created. (Latched per process.)
+      {
+        auto precision = std::to_string(config::video.pyrowave_precision);
+  #ifdef _WIN32
+        _putenv_s("PYROWAVE_PRECISION", precision.c_str());
+  #else
+        setenv("PYROWAVE_PRECISION", precision.c_str(), 1);
+  #endif
+      }
       auto ctx = pyrowave_vk::context::create();
       if (!ctx) {
         BOOST_LOG(error) << "pyrowave: failed to create Vulkan context";
@@ -2363,8 +2384,12 @@ namespace video {
       // encoding at the display size produces a mismatched bitstream that the decoder
       // rejects (endless IDR requests -> black screen). The capture frame (display
       // size) is scaled down to config in upload_image().
+      // Align block packets to RTP payload boundaries when the negotiated
+      // packetsize is known (it is 0 during encoder probing).
+      size_t shard_payload = config.packetsize > 0 ? stream::video_payload_size_per_shard(config.packetsize) : 0;
       auto dev = pyrowave_enc::pyrowave_encode_device_t::create(
-        std::move(ctx), config.width, config.height, config.bitrate * 1000LL, config.framerate, colorspace);
+        std::move(ctx), config.width, config.height, config.bitrate * 1000LL, config.framerate, colorspace,
+        shard_payload, config::video.pyrowave_quality_bias, config::video.pyrowave_refresh_interval);
       if (dev) {
         result = std::move(dev);
         result->colorspace = colorspace;

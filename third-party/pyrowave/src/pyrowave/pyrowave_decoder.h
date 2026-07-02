@@ -50,10 +50,30 @@ class DecoderInput
 	uint32_t last_seq = UINT32_MAX;
 	int total_blocks_in_sequence = 0;
 
+	// Fork extensions (conditional replenishment / aligned packetization) ---
+	size_t skip_size = 0;  ///< remaining bytes of an in-band padding record to discard
+	uint32_t pending_block_index = UINT32_MAX;  ///< block registered only once fully received
+	uint32_t pending_offset_u32 = 0;
+	bool keep_frame = true;  ///< current frame uses keep-previous semantics (seq code 1)
+	bool seen_full_frame = false;  ///< a code-0 (full) frame initialized the coefficient state
+
 public:
 	DecoderInput(const Decoder &);
 	bool push_data(std::span<const uint8_t> data);
 	void clear();
+
+	// Fork extension: true when the current frame was coded with keep-previous
+	// semantics (conditional replenishment) AND honouring it is safe (a full
+	// frame has initialized the wavelet coefficient state).
+	bool keep_previous_frame() const
+	{
+		return keep_frame && seen_full_frame;
+	}
+
+	// Fork extension: call at each RTP-payload boundary. The host aligns block
+	// packets to payload boundaries, so a parser that is mid-record here lost
+	// the previous payload; this drops the partial record and resyncs.
+	void resync_at_packet_boundary();
 
 private:
 	void push_raw(const void * data, size_t size);
@@ -66,6 +86,9 @@ class Decoder : public WaveletBuffers
 
 	bool use_readonly_texel_buffer = false;
 	bool fragment_path;
+	// Fork extension: wavelet images hold valid contents from a previous frame
+	// (switches the per-frame acquire barrier from discard to preserve).
+	bool wavelet_images_valid = false;
 	vk::raii::PhysicalDevice & phys_dev;
 	vk::raii::DescriptorPool ds_pool;
 
@@ -137,7 +160,7 @@ public:
 	bool decode(vk::raii::CommandBuffer & cmd, DecoderInput & input, const ViewBuffers & views);
 
 private:
-	bool dequant(vk::raii::CommandBuffer & cmd, size_t storage_mode);
+	bool dequant(vk::raii::CommandBuffer & cmd, size_t storage_mode, bool keep_previous);
 	bool idwt(vk::raii::CommandBuffer & cmd, const ViewBuffers & views);
 	bool idwt_fragment(vk::raii::CommandBuffer & cmd, const ViewBuffers & views);
 	vk::DescriptorSet allocate_descriptor_set(vk::DescriptorSetLayout);

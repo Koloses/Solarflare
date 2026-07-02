@@ -18,6 +18,7 @@
  */
 #pragma once
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <memory>
@@ -40,7 +41,9 @@ namespace pyrowave_enc {
   struct encoded_frame {
     std::vector<uint8_t> data;
     int64_t frame_index = 0;
-    bool idr = true;  ///< PyroWave is intra-only: every frame is an IDR.
+    bool idr = true;  ///< True for full-refresh frames (every block present). With
+                      ///< conditional replenishment enabled, most frames omit
+                      ///< unchanged blocks and are sent as P-frames.
   };
 
   /**
@@ -60,13 +63,21 @@ namespace pyrowave_enc {
      * @param fps Frame rate.
      * @return nullptr on failure.
      */
+    /// @param shard_payload_size Video payload bytes per RTP packet (block
+    ///        packets are aligned to these boundaries; 0 disables alignment).
+    /// @param quality_bias Extra bits of initial quantization ceiling (0-3).
+    /// @param refresh_interval Conditional replenishment: every block is
+    ///        re-sent at least once per N frames; 0 sends all blocks always.
     static std::unique_ptr<pyrowave_encode_device_t> create(
       std::shared_ptr<pyrowave_vk::context> ctx,
       int width,
       int height,
       int64_t bitrate_bps,
       int fps,
-      const video::sunshine_colorspace_t &colorspace);
+      const video::sunshine_colorspace_t &colorspace,
+      size_t shard_payload_size = 0,
+      int quality_bias = 0,
+      int refresh_interval = 0);
 
     ~pyrowave_encode_device_t() override;
 
@@ -76,10 +87,18 @@ namespace pyrowave_enc {
     /// Wait for the GPU, packetize, and return the frame bitstream.
     encoded_frame encode_frame(int64_t frame_index);
 
+    /// Request that the next frame re-sends every block (a code-0 full frame).
+    /// Wired to the client's IDR request: after packet loss the client asks for
+    /// this so stale (keep-previous) blocks heal immediately.
+    void request_full_refresh() {
+      full_refresh_.store(true, std::memory_order_relaxed);
+    }
+
   private:
     pyrowave_encode_device_t() = default;
 
     bool init(int width, int height, int64_t bitrate_bps, int fps);
+    size_t adaptive_target_size() const;  ///< per-frame RDO budget incl. replenishment savings
     bool upload_image(platf::img_t &img);  ///< memcpy the BGRA capture into the source staging buffer.
     bool ensure_source(uint32_t src_w, uint32_t src_h);  ///< (re)create the GPU source image at capture res.
     bool ensure_cursor(uint32_t w, uint32_t h);  ///< (re)create the cursor image at the cursor size.
@@ -89,7 +108,23 @@ namespace pyrowave_enc {
 
     int width_ = 0;
     int height_ = 0;
-    size_t target_size_ = 0;  ///< per-frame byte budget
+    size_t target_size_ = 0;  ///< per-frame byte budget (base, from the bitrate)
+
+    // --- Aligned packetization + conditional replenishment ------------------
+    size_t shard_payload_size_ = 0;  ///< RTP payload bytes per packet (0 = no alignment)
+    int refresh_interval_ = 0;  ///< force-refresh period in frames (0 = replenishment off)
+    std::vector<uint64_t> block_hashes_;  ///< per 32x32 block: hash of the last packet sent
+    uint64_t frame_counter_ = 0;
+    std::atomic<bool> full_refresh_ {true};  ///< next frame is a full (code-0, IDR) frame
+    uint32_t seq_mirror_ = 7;  ///< mirrors PyroWave::Encoder::sequence_count (pre-increment)
+    bool logged_seq_mismatch_ = false;
+
+    // Adaptive budget: spend replenishment savings on quality. Changed rarely
+    // and in coarse steps so the RDO's quant decisions stay stable frame-to-
+    // frame (stability is what makes block skipping effective).
+    double budget_scale_ = 1.0;
+    int low_usage_frames_ = 0;
+    int quality_bias_ = 0;
 
     // Vulkan input planes (separate R8 images: Y full-res, Cb/Cr half-res for
     // 4:2:0) + their views, passed as the encoder's ViewBuffers.

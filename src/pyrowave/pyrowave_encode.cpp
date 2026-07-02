@@ -69,6 +69,26 @@ namespace pyrowave_enc {
       });
     }
 
+    // Conditional replenishment sentinels for the per-block hash table.
+    constexpr uint64_t kHashNever = 0;  ///< block never sent (forces a send)
+    constexpr uint64_t kHashEmpty = 1;  ///< block last coded as an explicit zero block
+
+    // FNV-1a over a packed block packet with the 3 sequence bits masked out
+    // (they change every frame). The high bit is forced so real hashes never
+    // collide with the sentinels above.
+    uint64_t hash_block_packet(const uint8_t *p, size_t n) {
+      uint64_t h = 1469598103934665603ull;
+      for (size_t i = 0; i < n; ++i) {
+        uint8_t b = p[i];
+        if (i == 3) {
+          b &= uint8_t(~0x70);  // BitstreamHeader byte 3, bits 4-6 = sequence
+        }
+        h ^= b;
+        h *= 1099511628211ull;
+      }
+      return h | 0x8000000000000000ull;
+    }
+
     buffer_allocation make_host_buffer(vk::raii::Device &device, size_t size, vk::BufferUsageFlags usage, const char *name) {
       return buffer_allocation(
         device,
@@ -86,10 +106,20 @@ namespace pyrowave_enc {
     int height,
     int64_t bitrate_bps,
     int fps,
-    const video::sunshine_colorspace_t &colorspace) {
+    const video::sunshine_colorspace_t &colorspace,
+    size_t shard_payload_size,
+    int quality_bias,
+    int refresh_interval) {
     auto self = std::unique_ptr<pyrowave_encode_device_t>(new pyrowave_encode_device_t());
     self->ctx_ = std::move(ctx);
     self->colorspace = colorspace;
+    // Alignment needs a sane, word-aligned shard payload (first shard also
+    // carries the 8-byte frame header, so require some minimum room).
+    if (shard_payload_size >= 64 && shard_payload_size % 4 == 0) {
+      self->shard_payload_size_ = shard_payload_size;
+    }
+    self->quality_bias_ = std::clamp(quality_bias, 0, 3);
+    self->refresh_interval_ = std::clamp(refresh_interval, 0, 255);
     if (!self->init(width, height, bitrate_bps, std::max(1, fps))) {
       return nullptr;
     }
@@ -107,6 +137,8 @@ namespace pyrowave_enc {
       BOOST_LOG(info) << "pyrowave: creating Encoder " << width << "x" << height;
       enc_ = std::make_unique<PyroWave::Encoder>(
         ctx_->physical_device(), device, width, height, PyroWave::ChromaSubsampling::Chroma420);
+      enc_->set_quality_bias(quality_bias_);
+      block_hashes_.assign(size_t(enc_->block_count_32x32), kHashNever);
       BOOST_LOG(info) << "pyrowave: Encoder created";
 
       // Three R8 plane images (Y full-res, Cb/Cr half-res for 4:2:0).
@@ -131,7 +163,9 @@ namespace pyrowave_enc {
       // pixelated noise). Size generously: target + all block headers + a floor.
       size_t blocks_32 = size_t((width + 31) / 32) * size_t((height + 31) / 32);
       size_t header_overhead = blocks_32 * 64 + 4096;  // 64B/block headroom + seq header
-      size_t data_size = std::max<size_t>(target_size_ * 2, size_t(width) * height / 2)
+      // target*4: headroom for the adaptive replenishment budget (scale <= 2)
+      // plus RDO overshoot on complex frames.
+      size_t data_size = std::max<size_t>(target_size_ * 4, size_t(width) * height / 2)
                          + header_overhead + 2 * meta_size;
       data_buf_ = make_host_buffer(device, data_size,
         vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferSrc, "pyrowave data");
@@ -214,7 +248,10 @@ namespace pyrowave_enc {
 
       BOOST_LOG(info) << "pyrowave: encode device ready " << width << "x" << height
                       << " target/frame=" << target_size_ << " bytes"
-                      << " PRECISION=" << int(PYROWAVE_PRECISION)
+                      << " precision=" << PyroWave::Configuration::get().get_precision()
+                      << " quality_bias=" << quality_bias_
+                      << " refresh_interval=" << refresh_interval_
+                      << " shard_payload=" << shard_payload_size_
                       << " fp16_math=" << (std::getenv("PYROWAVE_NO_FP16_MATH") ? "OFF(forced fp32)" : "on");
       return true;
     } catch (const std::exception &e) {
@@ -480,19 +517,23 @@ namespace pyrowave_enc {
       PyroWave::Encoder::BitstreamBuffers buffers {
         .meta = {.buffer = meta_buf_, .offset = 0, .size = meta_buf_.info().size},
         .bitstream = {.buffer = data_buf_, .offset = 0, .size = data_buf_.info().size},
-        .target_size = target_size_,
+        .target_size = adaptive_target_size(),
       };
       if (!enc_->encode(cmd_, views, buffers)) {
         BOOST_LOG(error) << "pyrowave encode() failed to record";
         return -1;
       }
+      // The codec increments its 3-bit sequence per encode(); mirror it so
+      // synthetic (explicit-zero) block headers can carry the right sequence
+      // even when no coded block is available to read it from.
+      seq_mirror_ = (seq_mirror_ + 1) & 0x7;
 
       if (meta_staging_) {
         cmd_.copyBuffer(meta_buf_, meta_staging_, vk::BufferCopy {.size = buffers.meta.size});
       }
-      if (data_staging_) {
-        cmd_.copyBuffer(data_buf_, data_staging_, vk::BufferCopy {.size = buffers.bitstream.size});
-      }
+      // NOTE: the bitstream buffer is NOT copied here. encode_frame() first maps
+      // the (tiny) meta buffer to learn the used extent, then copies only that
+      // region instead of the multi-MB worst-case buffer.
 
       cmd_.end();
       device.resetFences(*fence_);
@@ -521,7 +562,38 @@ namespace pyrowave_enc {
       busy_ = false;
 
       const void *meta = meta_staging_ ? meta_staging_.map() : meta_buf_.map();
-      const void *data = data_staging_ ? data_staging_.map() : data_buf_.map();
+      const auto *blocks = static_cast<const PyroWave::BitstreamPacket *>(meta);
+      const int block_count = enc_->block_count_32x32;
+
+      // Used extent of the packed bitstream, from the (tiny) meta table.
+      size_t end_words = 0;
+      for (int i = 0; i < block_count; ++i) {
+        if (blocks[i].num_words) {
+          end_words = std::max<size_t>(end_words, size_t(blocks[i].offset_u32) + blocks[i].num_words);
+        }
+      }
+
+      const void *data;
+      if (data_staging_) {
+        // Copy only the used region (typically tens of KB) instead of the
+        // multi-MB worst-case buffer. Recorded after the encode's fence, so a
+        // small second submit is needed on this (non host-visible) path.
+        if (end_words) {
+          cmd_.reset();
+          cmd_.begin({.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
+          cmd_.copyBuffer(data_buf_, data_staging_, vk::BufferCopy {.size = end_words * sizeof(uint32_t)});
+          cmd_.end();
+          device.resetFences(*fence_);
+          ctx_->queue().submit(vk::SubmitInfo {.commandBufferCount = 1, .pCommandBuffers = &*cmd_}, *fence_);
+          if (device.waitForFences(*fence_, true, UINT64_MAX) != vk::Result::eSuccess) {
+            BOOST_LOG(error) << "pyrowave: waitForFences (bitstream copy) failed";
+            return out;
+          }
+        }
+        data = data_staging_.map();
+      } else {
+        data = data_buf_.map();
+      }
 
       // Diagnostic (off by default): validate the finished bitstream's per-block
       // self-consistency. It walks every block on the CPU each frame, on the encode
@@ -547,30 +619,175 @@ namespace pyrowave_enc {
         }
       }
 
-      // One contiguous packet per frame: use a packet_boundary >= the whole buffer
-      // so packetize() emits a single self-delimiting span we can ship as-is.
-      const size_t boundary = data_buf_.info().size;
-      size_t n = enc_->compute_num_packets(meta, boundary);
-      if (n == 0) {
-        if (!logged_first_encode_) {
-          logged_first_encode_ = true;
-          BOOST_LOG(warning) << "pyrowave: encode_frame produced 0 packets";
-        }
-        return out;
-      }
-      std::vector<PyroWave::Encoder::Packet> packets(n);
-      out.data.resize(data_buf_.info().size);
-      size_t produced = enc_->packetize(packets.data(), boundary, out.data.data(), out.data.size(), meta, data);
+      // ---- Conditional replenishment + RTP-aligned packetization ----------
+      const auto *bitstream_u8 = static_cast<const uint8_t *>(data);
 
-      // Trim to the actual contiguous extent written.
-      size_t end = 0;
-      for (size_t i = 0; i < produced; ++i) {
-        end = std::max(end, packets[i].offset + packets[i].size);
+      const bool replenish = refresh_interval_ > 0;
+      const bool refresh_requested = full_refresh_.exchange(false, std::memory_order_relaxed);
+      const bool full = !replenish || refresh_requested;
+
+      // This frame's 3-bit sequence: read it from the first coded block
+      // (fall back to the CPU mirror on a frame with no coded blocks).
+      uint32_t seq = seq_mirror_;
+      for (int i = 0; i < block_count; ++i) {
+        if (blocks[i].num_words) {
+          PyroWave::BitstreamHeader hdr;
+          std::memcpy(&hdr, bitstream_u8 + size_t(blocks[i].offset_u32) * 4, sizeof(hdr));
+          seq = hdr.sequence;
+          break;
+        }
       }
-      out.data.resize(end);
+      if (seq != seq_mirror_ && !logged_seq_mismatch_) {
+        logged_seq_mismatch_ = true;
+        BOOST_LOG(warning) << "pyrowave: sequence mirror out of sync (mirror=" << seq_mirror_
+                           << " bitstream=" << seq << "); using bitstream value";
+      }
+      seq_mirror_ = seq;
+
+      // Decide per block: 0 = skip, 1 = send coded data, 2 = explicit zero block.
+      std::vector<uint8_t> actions(size_t(block_count), 0);
+      size_t send_bytes = 0;
+      uint32_t sent_blocks = 0;
+      for (int i = 0; i < block_count; ++i) {
+        const bool present = blocks[i].num_words != 0;
+        const uint64_t cur = present
+                               ? hash_block_packet(bitstream_u8 + size_t(blocks[i].offset_u32) * 4, size_t(blocks[i].num_words) * 4)
+                               : kHashEmpty;
+        uint8_t action = 0;
+        if (full) {
+          // Legacy full frame (code 0): send every coded block; absent blocks
+          // decode to zero on the client.
+          action = present ? 1 : 0;
+        } else {
+          // Keep-previous frame (code 1): send only what changed, plus the
+          // rolling refresh slice (bounds staleness after packet loss).
+          const bool due = (uint64_t(i) % uint64_t(refresh_interval_)) == (frame_counter_ % uint64_t(refresh_interval_));
+          if (due || cur != block_hashes_[i]) {
+            action = present ? 1 : 2;
+          }
+        }
+        block_hashes_[i] = cur;
+        actions[i] = action;
+        if (action == 1) {
+          send_bytes += size_t(blocks[i].num_words) * 4;
+          sent_blocks++;
+        } else if (action == 2) {
+          send_bytes += sizeof(PyroWave::BitstreamHeader);
+          sent_blocks++;
+        }
+      }
+
+      out.idr = full;
+      out.data.clear();
+      out.data.reserve(send_bytes + send_bytes / 4 + 4096);
+
+      // RTP alignment: the RTP layer splits the frame into payloads of
+      // shard_payload_size_ bytes; the FIRST payload additionally carries the
+      // 8-byte video_short_frame_header_t. In-band padding records keep every
+      // block packet within a single payload, so a lost payload costs only its
+      // own blocks and the parser resyncs at the next payload.
+      const bool aligned = shard_payload_size_ != 0;
+      const size_t shard = shard_payload_size_;
+      size_t next_boundary = aligned ? shard - 8 : SIZE_MAX;
+
+      auto append_bytes = [&](const void *src, size_t len) {
+        const auto *b = static_cast<const uint8_t *>(src);
+        out.data.insert(out.data.end(), b, b + len);
+      };
+      auto append_padding = [&](size_t len) {
+        // len >= 8 and word-aligned: magic, word count, zero fill.
+        const uint32_t rec[2] = {PyroWave::BitstreamPaddingMagic, uint32_t(len / 4 - 2)};
+        append_bytes(rec, sizeof(rec));
+        out.data.resize(out.data.size() + (len - sizeof(rec)), 0);
+      };
+      auto append_record = [&](const void *src, size_t len) {
+        if (aligned) {
+          for (;;) {
+            const size_t pos = out.data.size();
+            if (next_boundary < pos + 8) {
+              // Sliver (< 8 bytes) or already-crossed boundary: cannot hold a
+              // padding record; that boundary stays unaligned (rare, only
+              // after an oversized record). Move to the next one.
+              next_boundary += shard;
+              continue;
+            }
+            const size_t rem = next_boundary - pos;
+            if (len > shard) {
+              break;  // record larger than a payload: let it span
+            }
+            if (len <= rem && rem - len != 4) {
+              break;  // fits, and doesn't leave an un-paddable 4-byte tail
+            }
+            append_padding(rem);
+            next_boundary += shard;
+          }
+        }
+        append_bytes(src, len);
+        if (aligned && out.data.size() == next_boundary) {
+          next_boundary += shard;
+        }
+      };
+
+      // Frame (sequence) header first.
+      PyroWave::BitstreamSequenceHeader shdr = {};
+      shdr.width_minus_1 = width_ - 1;
+      shdr.height_minus_1 = height_ - 1;
+      shdr.sequence = seq;
+      shdr.extended = 1;
+      shdr.code = full ? PyroWave::BITSTREAM_EXTENDED_CODE_START_OF_FRAME
+                       : PyroWave::BITSTREAM_EXTENDED_CODE_START_OF_FRAME_KEEP;
+      shdr.total_blocks = sent_blocks;
+      shdr.chroma_resolution = PyroWave::CHROMA_RESOLUTION_420;
+      append_record(&shdr, sizeof(shdr));
+
+      for (int i = 0; i < block_count; ++i) {
+        if (actions[i] == 1) {
+          append_record(bitstream_u8 + size_t(blocks[i].offset_u32) * 4, size_t(blocks[i].num_words) * 4);
+        } else if (actions[i] == 2) {
+          // Explicit zero block: header-only packet (ballot 0). The decoder
+          // stores zeros, replacing whatever the block previously held.
+          PyroWave::BitstreamHeader hdr = {};
+          hdr.ballot = 0;
+          hdr.payload_words = sizeof(hdr) / sizeof(uint32_t);
+          hdr.sequence = seq;
+          hdr.extended = 0;
+          hdr.quant_code = 0;
+          hdr.block_index = uint32_t(i);
+          append_record(&hdr, sizeof(hdr));
+        }
+      }
+
+      frame_counter_++;
+
+      // Adaptive budget: spend replenishment savings on quality. Coarse, rare
+      // steps keep the RDO's quant decisions stable frame-to-frame (stability
+      // is what makes block skipping effective); an over-budget frame resets
+      // the scale immediately.
+      if (replenish) {
+        const size_t wire = out.data.size();
+        if (wire > target_size_) {
+          if (budget_scale_ != 1.0) {
+            BOOST_LOG(debug) << "pyrowave: resetting RDO budget scale (frame used " << wire << " bytes)";
+          }
+          budget_scale_ = 1.0;
+          low_usage_frames_ = 0;
+        } else if (wire * 2 < target_size_ && budget_scale_ < 2.0) {
+          if (++low_usage_frames_ >= 120) {
+            budget_scale_ = std::min(2.0, budget_scale_ * 1.5);
+            low_usage_frames_ = 0;
+            BOOST_LOG(info) << "pyrowave: raising RDO budget scale to " << budget_scale_
+                            << " (spending replenishment savings on quality)";
+          }
+        } else {
+          low_usage_frames_ = 0;
+        }
+      }
+
       if (!logged_first_encode_) {
         logged_first_encode_ = true;
-        BOOST_LOG(info) << "pyrowave: first frame encoded " << end << " bytes in " << produced << " packets";
+        BOOST_LOG(info) << "pyrowave: first frame encoded " << out.data.size() << " bytes ("
+                        << sent_blocks << "/" << block_count << " blocks, "
+                        << (full ? "full" : "keep") << ")";
       }
       return out;
     } catch (const std::exception &e) {
@@ -578,6 +795,10 @@ namespace pyrowave_enc {
       out.data.clear();
       return out;
     }
+  }
+
+  size_t pyrowave_encode_device_t::adaptive_target_size() const {
+    return size_t(double(target_size_) * budget_scale_);
   }
 
   pyrowave_encode_device_t::~pyrowave_encode_device_t() {

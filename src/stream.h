@@ -22,6 +22,14 @@ namespace stream {
 
   struct session_t;
 
+  /**
+   * @brief Video payload bytes carried per RTP packet for a negotiated packetsize.
+   * @details The RTP layer splits each frame into shards of this size (the first
+   * shard additionally carries an 8-byte frame header). Exposed so the PyroWave
+   * encoder can align its self-delimiting block packets to shard boundaries.
+   */
+  size_t video_payload_size_per_shard(int packetsize);
+
   struct config_t {
     audio::config_t audio;
     video::config_t monitor;

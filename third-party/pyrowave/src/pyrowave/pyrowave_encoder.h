@@ -18,6 +18,7 @@ class Encoder : public WaveletBuffers
 	};
 	buffer_allocation bucket_buffer, meta_buffer, block_stat_buffer, payload_data, quant_buffer;
 	uint32_t sequence_count = 0;
+	int quality_bias = 0;
 
 	pipeline block_packing_;
 	pipeline resolve_rdo_;
@@ -51,6 +52,12 @@ public:
 	};
 
 	bool encode(vk::raii::CommandBuffer & cmd, const ViewBuffers & views, const BitstreamBuffers & buffers);
+
+	// Fork extension: raise the initial (pre-RDO) quantization resolution by
+	// this many bits (clamped to [0, 3]). Lets very high per-frame budgets buy
+	// additional quality instead of saturating. Encoder-side only; the wire
+	// format is unchanged (quant codes are carried per block).
+	void set_quality_bias(int extra_bits);
 
 	// Debug hackery
 	const vk::ImageView get_wavelet_band(int component, int level);

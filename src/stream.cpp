@@ -132,6 +132,12 @@ namespace stream {
     NV_VIDEO_PACKET packet;
   };
 
+  size_t video_payload_size_per_shard(int packetsize) {
+    // Mirrors videoBroadcastThread: blocksize = packetsize + MAX_RTP_HEADER_SIZE,
+    // payload_blocksize = blocksize - sizeof(video_packet_raw_t).
+    return size_t(packetsize) + MAX_RTP_HEADER_SIZE - sizeof(video_packet_raw_t);
+  }
+
   struct video_packet_enc_prefix_t {
     std::uint8_t iv[12];  // 12-byte IV is ideal for AES-GCM
     std::uint32_t frameNumber;

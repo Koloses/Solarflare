@@ -44,6 +44,22 @@ namespace config {
     // unless Sunshine was built with the PyroWave codec enabled.
     bool force_pyrowave;
 
+    // PyroWave wavelet-coefficient storage precision: 0 (fp16, coarse),
+    // 1 (fp16 with fp32 low bands, default), 2 (full fp32 - highest quality
+    // headroom, slightly more VRAM bandwidth).
+    int pyrowave_precision;
+
+    // PyroWave: raise the initial (pre-RDO) quantization ceiling by this many
+    // bits (0-3). At default 0, quality saturates once the per-frame budget
+    // exceeds the cost at the default resolution; raise for very high bitrates.
+    int pyrowave_quality_bias;
+
+    // PyroWave conditional replenishment: unchanged 32x32 blocks are omitted
+    // from the bitstream, and every block is force-refreshed at least once per
+    // N frames (bounds staleness after packet loss). 0 disables replenishment
+    // (every frame carries all blocks, the pre-fork behaviour).
+    int pyrowave_refresh_interval;
+
     int min_threads;  // Minimum number of threads/slices for CPU encoding
 
     struct {

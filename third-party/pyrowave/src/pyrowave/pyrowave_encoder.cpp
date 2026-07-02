@@ -871,6 +871,11 @@ Encoder::Encoder(vk::raii::PhysicalDevice & phys_dev, vk::raii::Device & device,
 	*/
 }
 
+void Encoder::set_quality_bias(int extra_bits)
+{
+	quality_bias = std::clamp(extra_bits, 0, 3);
+}
+
 float Encoder::get_quant_rdo_distortion_scale(int level, int component, int band) const
 {
 	// From my Linelet master thesis. Copy paste 11 years later, ah yes :D
@@ -879,9 +884,18 @@ float Encoder::get_quant_rdo_distortion_scale(int level, int component, int band
 
 	// Normal PC monitors.
 	constexpr float dpi = 96.0f;
-	// Compromise between couch gaming and desktop.
-	constexpr float viewing_distance = 1.0f;
-	constexpr float cpd_nyquist = 0.34f * viewing_distance * dpi;
+	// Compromise between couch gaming and desktop. Tunable: the CSF assumes a
+	// 96-dpi monitor at 1 m; phone/TV clients sit elsewhere on the curve.
+	static const float viewing_distance = [] {
+		if (const char * env = std::getenv("PYROWAVE_CSF_DISTANCE"))
+		{
+			float v = std::strtof(env, nullptr);
+			if (v >= 0.25f && v <= 4.0f)
+				return v;
+		}
+		return 1.0f;
+	}();
+	const float cpd_nyquist = 0.34f * viewing_distance * dpi;
 
 	float cpd = std::sqrt(horiz_midpoint * horiz_midpoint + vert_midpoint * vert_midpoint) *
 	            cpd_nyquist * std::exp2(-float(level));
@@ -895,8 +909,19 @@ float Encoder::get_quant_rdo_distortion_scale(int level, int component, int band
 	if (component != 0 && level != DecompositionLevels - 1)
 	{
 		// Consider chroma a little more important if we're not subsampling.
+		// Tunable: lower buys luma detail on game content, higher helps
+		// coloured text/UI fringing.
+		static const float chroma_weight = [] {
+			if (const char * env = std::getenv("PYROWAVE_CHROMA_WEIGHT"))
+			{
+				float v = std::strtof(env, nullptr);
+				if (v >= 0.1f && v <= 1.5f)
+					return v;
+			}
+			return 0.6f;
+		}();
 		if (chroma == ChromaSubsampling::Chroma420)
-			csf *= 0.6f;
+			csf *= chroma_weight;
 	}
 
 	// Due to filtering, distortion in lower bands will result in more noise power.
@@ -911,8 +936,12 @@ float Encoder::get_quant_rdo_distortion_scale(int level, int component, int band
 float Encoder::get_quant_resolution(int level, int component, int band) const
 {
 	// FP16 range is limited, and this is more than a good enough initial estimate.
+	// At precision 2 the wavelet storage is fp32, so a finer ceiling is safe and
+	// lets very high bitrates actually buy quality (encode_quant supports it).
+	const int precision = Configuration::get().get_precision();
+	const float max_res = precision >= 2 ? 16384.0f : (precision >= 1 ? 4096.0f : 512.0f);
 	return std::min<float>(
-	        Configuration::get().get_precision() >= 1 ? 4096.0f : 512.0f,
+	        max_res,
 	        get_noise_power_normalized_quant_resolution(level, component, band));
 }
 
@@ -922,7 +951,10 @@ float Encoder::get_noise_power_normalized_quant_resolution(int level, int compon
 	// The low-pass gain for CDF 9/7 is 6 dB (1 bit). Every decomposition level subtracts 6 dB.
 
 	// Maybe make this based on the max rate to have a decent initial estimate.
-	int bits = Configuration::get().get_precision() >= 1 ? 8 : 6;
+	// quality_bias (set from the configured bitrate) raises the ceiling so the
+	// RDO has finer coefficients to spend a large budget on; without it quality
+	// saturates once the budget exceeds the cost at the default resolution.
+	int bits = (Configuration::get().get_precision() >= 1 ? 8 : 6) + quality_bias;
 
 	if (band == 0)
 		bits += 2;

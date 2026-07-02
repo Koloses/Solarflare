@@ -43,6 +43,11 @@ namespace video {
     int chromaSamplingType;  // 0 - 4:2:0, 1 - 4:4:4
 
     int enableIntraRefresh;  // 0 - disabled, 1 - enabled
+
+    // Negotiated RTP video packet size (x-nv-video[0].packetSize, after the
+    // server-side clamp). 0 when unknown (e.g. encoder probing). Used by the
+    // PyroWave encoder to align block packets to RTP payload boundaries.
+    int packetsize = 0;
   };
 
   platf::mem_type_e map_base_dev_type(AVHWDeviceType type);

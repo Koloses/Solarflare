@@ -42,7 +42,20 @@ static_assert(sizeof(BitstreamHeader) == 8, "BitstreamHeader is not 8 bytes.");
 enum
 {
 	BITSTREAM_EXTENDED_CODE_START_OF_FRAME = 0,
+	// Fork extension: identical to START_OF_FRAME, but blocks absent from the
+	// bitstream KEEP the previous frame's wavelet coefficients instead of
+	// decoding to zero. Used for conditional replenishment (the encoder omits
+	// unchanged 32x32 blocks). The encoder must send a code-0 (full) frame
+	// first so the decoder has fully-initialized coefficient state.
+	BITSTREAM_EXTENDED_CODE_START_OF_FRAME_KEEP = 1,
 };
+
+// Fork extension: in-band padding record used to align block packets to RTP
+// payload boundaries. Layout: u32 magic (0xFFFFFFFF), u32 word count N, then
+// N zero u32 words; the parser skips the whole record (8 + 4*N bytes). The
+// magic cannot collide with a real header: decoded as an extended (sequence)
+// header it would mean width_minus_1 == 0x3FFF with code 3, which is invalid.
+static constexpr uint32_t BitstreamPaddingMagic = 0xFFFFFFFFu;
 
 enum
 {

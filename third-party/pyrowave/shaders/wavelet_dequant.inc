@@ -57,6 +57,10 @@ layout(push_constant) uniform Registers
     int output_layer;
     int block_offset_32x32;
     int block_stride_32x32;
+    // Fork extension (conditional replenishment): non-zero when the frame was
+    // coded with keep-previous semantics - blocks absent from the bitstream
+    // retain the previous frame's coefficients instead of decoding to zero.
+    int keep_previous;
 } registers;
 
 #if STORAGE_MODE == 1
@@ -241,6 +245,10 @@ void main()
 
     if (offset_u32 == ~0u)
     {
+        // Absent block. Keep-previous frames (conditional replenishment) retain
+        // the previous coefficients; full frames decode absent blocks to zero.
+        if (registers.keep_previous != 0)
+            return;
         for (int j = 0; j < 2; j++)
             for (int i = 0; i < 4; i++)
                 imageStore(uDequantImg, ivec3(coord + ivec2(i, j), registers.output_layer), vec4(0.0));

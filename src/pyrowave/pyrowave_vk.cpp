@@ -41,15 +41,25 @@ namespace pyrowave_vk {
       return fallback;
     }
 
-    /// Find a queue family that supports compute.
+    /// Find a queue family that supports compute. Prefer a compute-only
+    /// (async compute) family so the encode overlaps the game's rendering on
+    /// the graphics queue instead of contending with it; fall back to the
+    /// first compute-capable family.
     uint32_t find_compute_family(vk::raii::PhysicalDevice &dev) {
       auto families = dev.getQueueFamilyProperties();
+      uint32_t fallback = UINT32_MAX;
       for (uint32_t i = 0; i < families.size(); ++i) {
-        if (families[i].queueFlags & vk::QueueFlagBits::eCompute) {
-          return i;
+        if (!(families[i].queueFlags & vk::QueueFlagBits::eCompute)) {
+          continue;
+        }
+        if (!(families[i].queueFlags & vk::QueueFlagBits::eGraphics)) {
+          return i;  // dedicated/async compute family
+        }
+        if (fallback == UINT32_MAX) {
+          fallback = i;
         }
       }
-      return UINT32_MAX;
+      return fallback;
     }
 
   }  // namespace
