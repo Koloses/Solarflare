@@ -1794,8 +1794,16 @@ namespace video {
   int encode_pyrowave(int64_t frame_nr, pyrowave_encode_session_t &session, safe::mail_raw_t::queue_t<packet_t> &packets, void *channel_data, std::optional<std::chrono::steady_clock::time_point> frame_timestamp) {
     auto encoded_frame = session.encode_frame(frame_nr);
     if (encoded_frame.data.empty()) {
-      BOOST_LOG(error) << "PyroWave returned empty packet";
-      return -1;
+      // Not fatal: convert() legitimately skips frames (e.g. the dummy/empty
+      // capture frames some backends deliver during session setup, or a
+      // transient dma-buf import miss). Ending the session here would kill
+      // streams that would recover on the next captured frame. Throttle the
+      // log; a genuinely wedged encoder is caught by the watchdog instead.
+      static uint64_t skipped = 0;
+      if ((skipped++ % 300) == 0) {
+        BOOST_LOG(warning) << "pyrowave: skipped frame (no encoded data); count=" << skipped;
+      }
+      return 0;
     }
 
     auto packet = std::make_unique<packet_raw_generic>(std::move(encoded_frame.data), encoded_frame.frame_index, encoded_frame.idr);

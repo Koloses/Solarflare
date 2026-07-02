@@ -886,8 +886,10 @@ namespace config {
   }
 
   bool to_bool(std::string &boolean) {
-    std::for_each(std::begin(boolean), std::end(boolean), [](char ch) {
-      return (char) std::tolower(ch);
+    // NB: std::for_each with a returning lambda does NOT modify the string;
+    // mutate in place so "True"/"Enabled" etc. parse correctly.
+    std::for_each(std::begin(boolean), std::end(boolean), [](char &ch) {
+      ch = (char) std::tolower(ch);
     });
 
     return boolean == "true"sv ||
