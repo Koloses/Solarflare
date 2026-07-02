@@ -319,10 +319,10 @@ void DecoderInput::clear()
 void DecoderInput::resync_at_packet_boundary()
 {
 	// Fork extension. CAUTION: only call this at a boundary that is KNOWN to
-	// follow lost data. Records larger than one RTP payload legitimately span
-	// payload boundaries, so a mid-record state at an arbitrary payload
-	// boundary is normal - resyncing there drops every spanning record.
-	// Currently unused by the clients for exactly that reason.
+	// follow lost data (the depacketizer tags such entries BUFFER_TYPE_GAP).
+	// Records larger than one RTP payload legitimately span payload
+	// boundaries, so a mid-record state at an ARBITRARY payload boundary is
+	// normal - resyncing there drops every spanning record.
 	if (header_size == 0 && packet_size == 0 && skip_size == 0)
 		return;
 	header_size = 0;
