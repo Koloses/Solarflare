@@ -1026,6 +1026,14 @@ namespace rtsp_stream {
       }
 
       config.monitor.packetsize = config.packetsize;
+      // Optional PyroWave adaptive-streaming opt-ins (Sunshine extension);
+      // absent on clients without the feature.
+      if (auto it = args.find("x-ss-video[0].pyrowaveAdaptiveFec"sv); it != std::end(args)) {
+        config.monitor.pyrowaveAdaptiveFec = (int) util::from_view(it->second);
+      }
+      if (auto it = args.find("x-ss-video[0].pyrowaveAdaptiveBitrate"sv); it != std::end(args)) {
+        config.monitor.pyrowaveAdaptiveBitrate = (int) util::from_view(it->second);
+      }
       config.monitor.height = (int) util::from_view(args.at("x-nv-video[0].clientViewportHt"sv));
       config.monitor.width = (int) util::from_view(args.at("x-nv-video[0].clientViewportWd"sv));
       config.monitor.framerate = (int) util::from_view(args.at("x-nv-video[0].maxFPS"sv));

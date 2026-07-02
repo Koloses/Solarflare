@@ -70,6 +70,8 @@ namespace pyrowave_enc {
     /// @param refresh_interval Conditional replenishment: every block is
     ///        re-sent at least once per N frames; 0 sends all blocks always.
     /// @param chroma444 Encode full-resolution chroma (4:4:4) instead of 4:2:0.
+    /// @param adaptive_bitrate Client opt-in: temporarily lower the encode
+    ///        bitrate (down to 50%) on observed loss, recovering when clean.
     static std::unique_ptr<pyrowave_encode_device_t> create(
       std::shared_ptr<pyrowave_vk::context> ctx,
       int width,
@@ -80,7 +82,8 @@ namespace pyrowave_enc {
       size_t shard_payload_size = 0,
       int quality_bias = 0,
       int refresh_interval = 0,
-      bool chroma444 = false);
+      bool chroma444 = false,
+      bool adaptive_bitrate = false);
 
     ~pyrowave_encode_device_t() override;
 
@@ -133,6 +136,12 @@ namespace pyrowave_enc {
     int quality_bias_ = 0;
     PyroWave::ChromaSubsampling chroma_ = PyroWave::ChromaSubsampling::Chroma420;
     bool capture_cursor_ = true;  ///< composite the hardware cursor into the frame
+
+    // Adaptive bitrate (client opt-in): every full-refresh request marks
+    // unrecoverable loss, so back the encode bitrate off multiplicatively
+    // (floor 50%) and recover slowly (~3.7%/s at 60 fps) while clean.
+    bool adaptive_bitrate_ = false;
+    double bitrate_scale_ = 1.0;
 
     // Spread refresh: a client-requested full refresh is distributed over this
     // many frames (each frame force-sends a 1/N slice of the blocks) so the

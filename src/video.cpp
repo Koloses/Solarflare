@@ -2424,7 +2424,7 @@ namespace video {
       auto dev = pyrowave_enc::pyrowave_encode_device_t::create(
         std::move(ctx), config.width, config.height, config.bitrate * 1000LL, config.framerate, colorspace,
         shard_payload, config::video.pyrowave_quality_bias, config::video.pyrowave_refresh_interval,
-        config.chromaSamplingType == 1);
+        config.chromaSamplingType == 1, config.pyrowaveAdaptiveBitrate != 0);
       if (dev) {
         result = std::move(dev);
         result->colorspace = colorspace;

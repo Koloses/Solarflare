@@ -141,7 +141,8 @@ namespace pyrowave_enc {
     size_t shard_payload_size,
     int quality_bias,
     int refresh_interval,
-    bool chroma444) {
+    bool chroma444,
+    bool adaptive_bitrate) {
     auto self = std::unique_ptr<pyrowave_encode_device_t>(new pyrowave_encode_device_t());
     self->ctx_ = std::move(ctx);
     self->colorspace = colorspace;
@@ -154,6 +155,7 @@ namespace pyrowave_enc {
     self->refresh_interval_ = std::clamp(refresh_interval, 0, 255);
     self->chroma_ = chroma444 ? PyroWave::ChromaSubsampling::Chroma444 : PyroWave::ChromaSubsampling::Chroma420;
     self->capture_cursor_ = config::video.pyrowave_capture_cursor;
+    self->adaptive_bitrate_ = adaptive_bitrate;
     if (!self->init(width, height, bitrate_bps, std::max(1, fps))) {
       return nullptr;
     }
@@ -290,6 +292,7 @@ namespace pyrowave_enc {
                       << " shard_payload=" << shard_payload_size_
                       << " chroma=" << (chroma_ == PyroWave::ChromaSubsampling::Chroma444 ? "444" : "420")
                       << " capture_cursor=" << capture_cursor_
+                      << " adaptive_bitrate=" << adaptive_bitrate_
                       << " fp16_math=" << (std::getenv("PYROWAVE_NO_FP16_MATH") ? "OFF(forced fp32)" : "on");
       watchdog_ = std::thread(&pyrowave_encode_device_t::watchdog_proc, this);
       return true;
@@ -671,6 +674,25 @@ namespace pyrowave_enc {
 
       const bool replenish = refresh_interval_ > 0;
       const bool refresh_requested = full_refresh_.exchange(false, std::memory_order_relaxed);
+
+      // Adaptive bitrate (client opt-in): a refresh request after stream start
+      // means unrecoverable loss - back off; otherwise creep back up.
+      if (adaptive_bitrate_) {
+        if (refresh_requested && sent_initial_full_) {
+          const double prev = bitrate_scale_;
+          bitrate_scale_ = std::max(0.5, bitrate_scale_ * 0.8);
+          if (bitrate_scale_ != prev) {
+            BOOST_LOG(info) << "pyrowave: adaptive bitrate backing off to "
+                            << int(bitrate_scale_ * 100.0) << "% (loss reported)";
+          }
+        } else if (!refresh_requested && bitrate_scale_ < 1.0) {
+          bitrate_scale_ = std::min(1.0, bitrate_scale_ * 1.0006);  // ~+3.7%/s at 60 fps
+          if (bitrate_scale_ == 1.0) {
+            BOOST_LOG(info) << "pyrowave: adaptive bitrate fully recovered";
+          }
+        }
+      }
+
       bool full = !replenish;
       if (refresh_requested) {
         if (!sent_initial_full_ || !replenish) {
@@ -849,17 +871,18 @@ namespace pyrowave_enc {
       // the scale immediately.
       if (replenish) {
         const size_t wire = out.data.size();
+        const size_t base = size_t(double(target_size_) * bitrate_scale_);
         if (full || spread_slice >= 0) {
           // Refresh traffic is expected to be large; it says nothing about the
           // scene, so leave the budget scale and its counters alone.
           low_usage_frames_ = 0;
-        } else if (wire > target_size_) {
+        } else if (wire > base) {
           if (budget_scale_ != 1.0) {
             BOOST_LOG(debug) << "pyrowave: resetting RDO budget scale (frame used " << wire << " bytes)";
           }
           budget_scale_ = 1.0;
           low_usage_frames_ = 0;
-        } else if (wire * 2 < target_size_ && budget_scale_ < 2.0) {
+        } else if (wire * 2 < base && budget_scale_ < 2.0) {
           if (++low_usage_frames_ >= 120) {
             budget_scale_ = std::min(2.0, budget_scale_ * 1.5);
             low_usage_frames_ = 0;
@@ -886,7 +909,7 @@ namespace pyrowave_enc {
   }
 
   size_t pyrowave_encode_device_t::adaptive_target_size() const {
-    double scale = budget_scale_;
+    double scale = budget_scale_ * bitrate_scale_;
     if (full_refresh_.load(std::memory_order_relaxed) || spread_refresh_remaining_ > 0) {
       // Refresh frames carry extra (re-sent) blocks; give them extra budget so
       // the heal doesn't arrive with visibly coarser quantization. Bounded by

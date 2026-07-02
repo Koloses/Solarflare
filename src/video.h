@@ -48,6 +48,13 @@ namespace video {
     // server-side clamp). 0 when unknown (e.g. encoder probing). Used by the
     // PyroWave encoder to align block packets to RTP payload boundaries.
     int packetsize = 0;
+
+    // PyroWave adaptive streaming opt-ins from the client (optional SDP
+    // attributes; 0 when absent). adaptiveFec lets the host raise FEC on
+    // observed loss; adaptiveBitrate lets it temporarily lower the encode
+    // bitrate. Both off unless the client asks.
+    int pyrowaveAdaptiveFec = 0;
+    int pyrowaveAdaptiveBitrate = 0;
   };
 
   platf::mem_type_e map_base_dev_type(AVHWDeviceType type);
