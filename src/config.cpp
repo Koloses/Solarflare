@@ -459,6 +459,7 @@ namespace config {
     1,  // pyrowave_precision
     0,  // pyrowave_quality_bias
     8,  // pyrowave_refresh_interval
+    true,  // pyrowave_capture_cursor
 
 
     2,  // min_threads
@@ -1113,6 +1114,7 @@ namespace config {
     int_between_f(vars, "pyrowave_precision", video.pyrowave_precision, {0, 2});
     int_between_f(vars, "pyrowave_quality_bias", video.pyrowave_quality_bias, {0, 3});
     int_between_f(vars, "pyrowave_refresh_interval", video.pyrowave_refresh_interval, {0, 255});
+    bool_f(vars, "pyrowave_capture_cursor", video.pyrowave_capture_cursor);
     int_f(vars, "min_threads", video.min_threads);
     string_f(vars, "sw_preset", video.sw.sw_preset);
     if (!video.sw.sw_preset.empty()) {

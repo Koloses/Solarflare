@@ -29,6 +29,7 @@ layout(push_constant) uniform Push {
     int   have_cursor;    // 1 = composite the cursor texture
     vec2  cursor_xy;      // cursor top-left, normalized over the source (top-down)
     vec2  cursor_wh;      // cursor size, normalized over the source
+    int   chroma444;      // 1 = full-resolution chroma (4:4:4), else 4:2:0
 } pc;
 
 float toY (vec3 c) { return 16.0 / 255.0 + (0.1826 * c.r + 0.6142 * c.g + 0.0620 * c.b); }
@@ -60,9 +61,14 @@ void main() {
     vec3 rgb = sample_src((vec2(p) + 0.5) * pc.inv_luma_size);
     imageStore(OutY, p, vec4(toY(rgb), 0.0, 0.0, 0.0));
 
+    if (pc.chroma444 != 0) {
+        // Chroma 4:4:4: full-resolution chroma from the same sample.
+        imageStore(OutCb, p, vec4(toCb(rgb), 0.0, 0.0, 0.0));
+        imageStore(OutCr, p, vec4(toCr(rgb), 0.0, 0.0, 0.0));
+    }
     // Chroma 4:2:0: one writer per 2x2 luma block, sampled at the block centre so
     // the linear filter averages the 2x2 footprint.
-    if ((p.x & 1) == 0 && (p.y & 1) == 0) {
+    else if ((p.x & 1) == 0 && (p.y & 1) == 0) {
         vec3 crgb = sample_src((vec2(p) + 1.0) * pc.inv_luma_size);
         ivec2 cp = p >> 1;
         imageStore(OutCb, cp, vec4(toCb(crgb), 0.0, 0.0, 0.0));

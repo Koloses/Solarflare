@@ -1367,6 +1367,14 @@ namespace stream {
 
       auto fecPercentage = config::stream.fec_percentage;
 
+      // PyroWave: adapt FEC to observed loss. The client requests a full
+      // refresh whenever a frame is unrecoverable, so the request rate is a
+      // direct loss signal; boost decays back to the configured base when the
+      // link is clean.
+      if (session->config.monitor.videoFormat == 3) {
+        fecPercentage = std::min<decltype(fecPercentage)>(fecPercentage + video::pyrowave_fec_boost(), 50);
+      }
+
       // Insert space for packet headers
       auto blocksize = session->config.packetsize + MAX_RTP_HEADER_SIZE;
       auto payload_blocksize = blocksize - sizeof(video_packet_raw_t);

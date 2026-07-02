@@ -360,6 +360,14 @@ namespace video {
   extern int active_hevc_mode;
   extern int active_av1_mode;
   extern int active_pyrowave_mode;
+
+  // Adaptive FEC for PyroWave streams: every client full-refresh (IDR) request
+  // signals unrecoverable packet loss, so the request rate is a loss signal.
+  // note_...() is called per request; pyrowave_fec_boost() returns extra FEC
+  // percentage points to add to the configured base (decays back to 0 after
+  // ~10 s without losses).
+  void pyrowave_note_refresh_request();
+  int pyrowave_fec_boost();
   extern bool last_encoder_probe_supported_ref_frames_invalidation;
 
   // --- PyroWave phase-offset pacing (mirrors pyrofling) ---

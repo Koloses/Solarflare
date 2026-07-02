@@ -454,6 +454,7 @@ namespace video {
     void request_idr_frame() override {
       if (device) {
         device->request_full_refresh();
+        pyrowave_note_refresh_request();
       }
     }
 
@@ -1268,6 +1269,39 @@ namespace video {
   // Resolved during encoder probing (Milestone 2) once a PyroWave encoder is registered.
   int active_pyrowave_mode = 0;
   bool last_encoder_probe_supported_ref_frames_invalidation = false;
+
+  // --- PyroWave adaptive FEC ------------------------------------------------
+  // Client full-refresh (IDR) requests indicate unrecoverable packet loss.
+  // Each request bumps the FEC boost; ~10 s without requests clears it.
+  namespace {
+    std::atomic<int64_t> pyrowave_last_refresh_req_ms {0};
+    std::atomic<int> pyrowave_fec_boost_pts {0};
+
+    int64_t steady_now_ms() {
+      return std::chrono::duration_cast<std::chrono::milliseconds>(
+               std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+    }
+  }  // namespace
+
+  void pyrowave_note_refresh_request() {
+    pyrowave_last_refresh_req_ms.store(steady_now_ms(), std::memory_order_relaxed);
+    int cur = pyrowave_fec_boost_pts.load(std::memory_order_relaxed);
+    while (cur < 16 && !pyrowave_fec_boost_pts.compare_exchange_weak(cur, std::min(cur + 4, 16), std::memory_order_relaxed)) {
+    }
+  }
+
+  int pyrowave_fec_boost() {
+    int boost = pyrowave_fec_boost_pts.load(std::memory_order_relaxed);
+    if (boost == 0) {
+      return 0;
+    }
+    if (steady_now_ms() - pyrowave_last_refresh_req_ms.load(std::memory_order_relaxed) > 10000) {
+      pyrowave_fec_boost_pts.store(0, std::memory_order_relaxed);
+      return 0;
+    }
+    return boost;
+  }
 
   // --- PyroWave phase-offset pacing (mirrors pyrofling's set/get_phase_offset + update_loop) ---
   static std::atomic<int> phase_offset_accum_us {0};
@@ -2389,7 +2423,8 @@ namespace video {
       size_t shard_payload = config.packetsize > 0 ? stream::video_payload_size_per_shard(config.packetsize) : 0;
       auto dev = pyrowave_enc::pyrowave_encode_device_t::create(
         std::move(ctx), config.width, config.height, config.bitrate * 1000LL, config.framerate, colorspace,
-        shard_payload, config::video.pyrowave_quality_bias, config::video.pyrowave_refresh_interval);
+        shard_payload, config::video.pyrowave_quality_bias, config::video.pyrowave_refresh_interval,
+        config.chromaSamplingType == 1);
       if (dev) {
         result = std::move(dev);
         result->colorspace = colorspace;

@@ -22,6 +22,7 @@
 #include <chrono>
 #include <cstdint>
 #include <memory>
+#include <thread>
 #include <vector>
 
 #include "src/platform/common.h"
@@ -68,6 +69,7 @@ namespace pyrowave_enc {
     /// @param quality_bias Extra bits of initial quantization ceiling (0-3).
     /// @param refresh_interval Conditional replenishment: every block is
     ///        re-sent at least once per N frames; 0 sends all blocks always.
+    /// @param chroma444 Encode full-resolution chroma (4:4:4) instead of 4:2:0.
     static std::unique_ptr<pyrowave_encode_device_t> create(
       std::shared_ptr<pyrowave_vk::context> ctx,
       int width,
@@ -77,7 +79,8 @@ namespace pyrowave_enc {
       const video::sunshine_colorspace_t &colorspace,
       size_t shard_payload_size = 0,
       int quality_bias = 0,
-      int refresh_interval = 0);
+      int refresh_interval = 0,
+      bool chroma444 = false);
 
     ~pyrowave_encode_device_t() override;
 
@@ -128,6 +131,25 @@ namespace pyrowave_enc {
     double budget_scale_ = 1.0;
     int low_usage_frames_ = 0;
     int quality_bias_ = 0;
+    PyroWave::ChromaSubsampling chroma_ = PyroWave::ChromaSubsampling::Chroma420;
+    bool capture_cursor_ = true;  ///< composite the hardware cursor into the frame
+
+    // Spread refresh: a client-requested full refresh is distributed over this
+    // many frames (each frame force-sends a 1/N slice of the blocks) so the
+    // heal doesn't produce one oversized/quality-dipped frame. The stream's
+    // very first frame is still a hard full (code-0) frame.
+    static constexpr int kSpreadRefreshFrames = 4;
+    int spread_refresh_remaining_ = 0;
+    bool sent_initial_full_ = false;
+
+    // Watchdog: detects a stuck encode (GPU hang or encoder bug) and logs it
+    // loudly instead of silently wedging the session. PYROWAVE_WATCHDOG_ABORT=1
+    // additionally aborts the process so a supervisor can restart Sunshine.
+    void watchdog_proc();
+    std::thread watchdog_;
+    std::atomic<bool> watchdog_stop_ {false};
+    std::atomic<int64_t> op_deadline_ms_ {0};  ///< 0 = idle
+    std::atomic<const char *> op_name_ {""};
 
     // Vulkan input planes (separate R8 images: Y full-res, Cb/Cr half-res for
     // 4:2:0) + their views, passed as the encoder's ViewBuffers.

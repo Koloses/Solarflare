@@ -60,6 +60,12 @@ namespace config {
     // (every frame carries all blocks, the pre-fork behaviour).
     int pyrowave_refresh_interval;
 
+    // PyroWave: composite the captured hardware cursor into the encoded frame
+    // (dma-buf capture path). Disable to keep cursor movement from re-coding
+    // otherwise-static blocks; the client then renders its own local cursor
+    // (best with absolute-mouse / remote-desktop style input).
+    bool pyrowave_capture_cursor;
+
     int min_threads;  // Minimum number of threads/slices for CPU encoding
 
     struct {

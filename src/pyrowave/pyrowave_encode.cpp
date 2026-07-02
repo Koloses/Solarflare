@@ -17,6 +17,7 @@
 #include <cstdlib>
 #include <cstring>
 
+#include "src/config.h"
 #include "src/logging.h"
 
 // Zero-copy capture: the VRAM capture path delivers an egl::img_descriptor_t that
@@ -44,6 +45,7 @@ namespace pyrowave_enc {
       int32_t have_cursor;
       float cursor_x, cursor_y;   // normalized over the source frame (top-down)
       float cursor_w, cursor_h;
+      int32_t chroma444;          // 1 = full-resolution chroma planes
     };
 
     // Create a single-plane R8 image usable as sampled + storage + transfer dst.
@@ -68,6 +70,35 @@ namespace pyrowave_enc {
         .subresourceRange = {.aspectMask = vk::ImageAspectFlagBits::eColor, .levelCount = 1, .layerCount = 1},
       });
     }
+
+    // Bounded GPU waits: a fence that doesn't signal within this window means a
+    // GPU hang (or a lost device); failing the frame lets the session tear down
+    // and restart instead of blocking the encode thread forever.
+    constexpr uint64_t kGpuWaitNs = 2ull * 1000 * 1000 * 1000;
+
+    int64_t steady_ms() {
+      return std::chrono::duration_cast<std::chrono::milliseconds>(
+               std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+    }
+
+    // RAII scope marker for the watchdog: arms a deadline on entry, disarms on
+    // exit. Covers CPU-side loops as well as GPU waits.
+    class op_watch {
+    public:
+      op_watch(std::atomic<int64_t> &deadline, std::atomic<const char *> &name, const char *op):
+          deadline_(deadline) {
+        name.store(op, std::memory_order_relaxed);
+        deadline_.store(steady_ms() + 5000, std::memory_order_relaxed);
+      }
+
+      ~op_watch() {
+        deadline_.store(0, std::memory_order_relaxed);
+      }
+
+    private:
+      std::atomic<int64_t> &deadline_;
+    };
 
     // Conditional replenishment sentinels for the per-block hash table.
     constexpr uint64_t kHashNever = 0;  ///< block never sent (forces a send)
@@ -109,7 +140,8 @@ namespace pyrowave_enc {
     const video::sunshine_colorspace_t &colorspace,
     size_t shard_payload_size,
     int quality_bias,
-    int refresh_interval) {
+    int refresh_interval,
+    bool chroma444) {
     auto self = std::unique_ptr<pyrowave_encode_device_t>(new pyrowave_encode_device_t());
     self->ctx_ = std::move(ctx);
     self->colorspace = colorspace;
@@ -120,6 +152,8 @@ namespace pyrowave_enc {
     }
     self->quality_bias_ = std::clamp(quality_bias, 0, 3);
     self->refresh_interval_ = std::clamp(refresh_interval, 0, 255);
+    self->chroma_ = chroma444 ? PyroWave::ChromaSubsampling::Chroma444 : PyroWave::ChromaSubsampling::Chroma420;
+    self->capture_cursor_ = config::video.pyrowave_capture_cursor;
     if (!self->init(width, height, bitrate_bps, std::max(1, fps))) {
       return nullptr;
     }
@@ -136,14 +170,16 @@ namespace pyrowave_enc {
 
       BOOST_LOG(info) << "pyrowave: creating Encoder " << width << "x" << height;
       enc_ = std::make_unique<PyroWave::Encoder>(
-        ctx_->physical_device(), device, width, height, PyroWave::ChromaSubsampling::Chroma420);
+        ctx_->physical_device(), device, width, height, chroma_);
       enc_->set_quality_bias(quality_bias_);
       block_hashes_.assign(size_t(enc_->block_count_32x32), kHashNever);
       BOOST_LOG(info) << "pyrowave: Encoder created";
 
-      // Three R8 plane images (Y full-res, Cb/Cr half-res for 4:2:0).
-      uint32_t cw = (uint32_t(width) + 1) / 2;
-      uint32_t ch = (uint32_t(height) + 1) / 2;
+      // Three R8 plane images (Y full-res; Cb/Cr half-res for 4:2:0 or
+      // full-res for 4:4:4).
+      const bool is444 = chroma_ == PyroWave::ChromaSubsampling::Chroma444;
+      uint32_t cw = is444 ? uint32_t(width) : (uint32_t(width) + 1) / 2;
+      uint32_t ch = is444 ? uint32_t(height) : (uint32_t(height) + 1) / 2;
       img_y_ = make_r8_image(device, width, height, "pyrowave Y");
       img_cb_ = make_r8_image(device, cw, ch, "pyrowave Cb");
       img_cr_ = make_r8_image(device, cw, ch, "pyrowave Cr");
@@ -252,7 +288,10 @@ namespace pyrowave_enc {
                       << " quality_bias=" << quality_bias_
                       << " refresh_interval=" << refresh_interval_
                       << " shard_payload=" << shard_payload_size_
+                      << " chroma=" << (chroma_ == PyroWave::ChromaSubsampling::Chroma444 ? "444" : "420")
+                      << " capture_cursor=" << capture_cursor_
                       << " fp16_math=" << (std::getenv("PYROWAVE_NO_FP16_MATH") ? "OFF(forced fp32)" : "on");
+      watchdog_ = std::thread(&pyrowave_encode_device_t::watchdog_proc, this);
       return true;
     } catch (const std::exception &e) {
       BOOST_LOG(error) << "pyrowave: encode device init failed: " << e.what();
@@ -337,6 +376,7 @@ namespace pyrowave_enc {
   }
 
   int pyrowave_encode_device_t::convert(platf::img_t &img) {
+    op_watch watch(op_deadline_ms_, op_name_, "convert()");
     try {
       if (!logged_first_convert_) {
         logged_first_convert_ = true;
@@ -391,7 +431,10 @@ namespace pyrowave_enc {
           // Cursor: the captured screen plane excludes the hardware cursor overlay.
           // The capture layer hands it to us as premultiplied BGRA pixels (desc->buffer)
           // with screen-space position/size; stage it for compositing in rgb2yuv.
-          if (desc->data && desc->src_w > 0 && desc->src_h > 0) {
+          // With pyrowave_capture_cursor=false the cursor is left out entirely so
+          // its movement never re-codes otherwise-static blocks (the client
+          // renders a local cursor instead).
+          if (capture_cursor_ && desc->data && desc->src_w > 0 && desc->src_h > 0) {
             ensure_cursor((uint32_t) desc->src_w, (uint32_t) desc->src_h);
             size_t n = std::min(desc->buffer.size(), size_t(desc->src_w) * size_t(desc->src_h) * 4);
             std::memcpy(cursor_staging_.map(), desc->buffer.data(), n);
@@ -501,7 +544,8 @@ namespace pyrowave_enc {
       cmd_.bindPipeline(vk::PipelineBindPoint::eCompute, *conv_pipe_);
       cmd_.bindDescriptorSets(vk::PipelineBindPoint::eCompute, *conv_pl_, 0, *conv_dset_, {});
       ConvPush push {(int32_t) width_, (int32_t) height_, 1.0f / float(width_), 1.0f / float(height_),
-                     flip_y, have_cursor, cur_x, cur_y, cur_w, cur_h};
+                     flip_y, have_cursor, cur_x, cur_y, cur_w, cur_h,
+                     chroma_ == PyroWave::ChromaSubsampling::Chroma444 ? 1 : 0};
       cmd_.pushConstants<ConvPush>(*conv_pl_, vk::ShaderStageFlagBits::eCompute, 0, push);
       cmd_.dispatch((width_ + 7) / 8, (height_ + 7) / 8, 1);
 
@@ -553,10 +597,13 @@ namespace pyrowave_enc {
     if (!busy_) {
       return out;
     }
+    op_watch watch(op_deadline_ms_, op_name_, "encode_frame()");
     try {
       auto &device = ctx_->device();
-      if (device.waitForFences(*fence_, true, UINT64_MAX) != vk::Result::eSuccess) {
-        BOOST_LOG(error) << "pyrowave: waitForFences failed";
+      if (device.waitForFences(*fence_, true, kGpuWaitNs) != vk::Result::eSuccess) {
+        // Timeout or error: almost certainly a GPU hang. Fail the frame so the
+        // session restarts instead of blocking this thread forever.
+        BOOST_LOG(error) << "pyrowave: encode fence wait failed/timed out (GPU hang?)";
         return out;
       }
       busy_ = false;
@@ -585,8 +632,8 @@ namespace pyrowave_enc {
           cmd_.end();
           device.resetFences(*fence_);
           ctx_->queue().submit(vk::SubmitInfo {.commandBufferCount = 1, .pCommandBuffers = &*cmd_}, *fence_);
-          if (device.waitForFences(*fence_, true, UINT64_MAX) != vk::Result::eSuccess) {
-            BOOST_LOG(error) << "pyrowave: waitForFences (bitstream copy) failed";
+          if (device.waitForFences(*fence_, true, kGpuWaitNs) != vk::Result::eSuccess) {
+            BOOST_LOG(error) << "pyrowave: bitstream copy fence wait failed/timed out (GPU hang?)";
             return out;
           }
         }
@@ -624,7 +671,27 @@ namespace pyrowave_enc {
 
       const bool replenish = refresh_interval_ > 0;
       const bool refresh_requested = full_refresh_.exchange(false, std::memory_order_relaxed);
-      const bool full = !replenish || refresh_requested;
+      bool full = !replenish;
+      if (refresh_requested) {
+        if (!sent_initial_full_ || !replenish) {
+          // Stream start (the decoder needs one code-0 frame to initialize its
+          // coefficient state), or replenishment disabled: hard full frame.
+          full = true;
+        } else {
+          // Client-requested heal: spread the re-send over a few frames so it
+          // doesn't produce one oversized frame with visibly coarser quants.
+          spread_refresh_remaining_ = kSpreadRefreshFrames;
+        }
+      }
+      int spread_slice = -1;
+      if (!full && spread_refresh_remaining_ > 0) {
+        spread_slice = kSpreadRefreshFrames - spread_refresh_remaining_;
+        spread_refresh_remaining_--;
+      }
+      if (full) {
+        sent_initial_full_ = true;
+        spread_refresh_remaining_ = 0;
+      }
 
       // This frame's 3-bit sequence: read it from the first coded block
       // (fall back to the CPU mirror on a frame with no coded blocks).
@@ -660,8 +727,12 @@ namespace pyrowave_enc {
           action = present ? 1 : 0;
         } else {
           // Keep-previous frame (code 1): send only what changed, plus the
-          // rolling refresh slice (bounds staleness after packet loss).
-          const bool due = (uint64_t(i) % uint64_t(refresh_interval_)) == (frame_counter_ % uint64_t(refresh_interval_));
+          // rolling refresh slice (bounds staleness after packet loss) and, if
+          // a heal is in progress, this frame's spread-refresh slice.
+          bool due = (uint64_t(i) % uint64_t(refresh_interval_)) == (frame_counter_ % uint64_t(refresh_interval_));
+          if (spread_slice >= 0 && int(uint64_t(i) % uint64_t(kSpreadRefreshFrames)) == spread_slice) {
+            due = true;
+          }
           if (due || cur != block_hashes_[i]) {
             action = present ? 1 : 2;
           }
@@ -748,7 +819,9 @@ namespace pyrowave_enc {
       shdr.code = full ? PyroWave::BITSTREAM_EXTENDED_CODE_START_OF_FRAME
                        : PyroWave::BITSTREAM_EXTENDED_CODE_START_OF_FRAME_KEEP;
       shdr.total_blocks = sent_blocks;
-      shdr.chroma_resolution = PyroWave::CHROMA_RESOLUTION_420;
+      shdr.chroma_resolution = chroma_ == PyroWave::ChromaSubsampling::Chroma444
+                                 ? PyroWave::CHROMA_RESOLUTION_444
+                                 : PyroWave::CHROMA_RESOLUTION_420;
       append_record(&shdr, sizeof(shdr));
 
       for (int i = 0; i < block_count; ++i) {
@@ -776,7 +849,11 @@ namespace pyrowave_enc {
       // the scale immediately.
       if (replenish) {
         const size_t wire = out.data.size();
-        if (wire > target_size_) {
+        if (full || spread_slice >= 0) {
+          // Refresh traffic is expected to be large; it says nothing about the
+          // scene, so leave the budget scale and its counters alone.
+          low_usage_frames_ = 0;
+        } else if (wire > target_size_) {
           if (budget_scale_ != 1.0) {
             BOOST_LOG(debug) << "pyrowave: resetting RDO budget scale (frame used " << wire << " bytes)";
           }
@@ -809,13 +886,50 @@ namespace pyrowave_enc {
   }
 
   size_t pyrowave_encode_device_t::adaptive_target_size() const {
-    return size_t(double(target_size_) * budget_scale_);
+    double scale = budget_scale_;
+    if (full_refresh_.load(std::memory_order_relaxed) || spread_refresh_remaining_ > 0) {
+      // Refresh frames carry extra (re-sent) blocks; give them extra budget so
+      // the heal doesn't arrive with visibly coarser quantization. Bounded by
+      // the 4x data-buffer sizing headroom.
+      scale = std::min(scale * 1.5, 3.0);
+    }
+    return size_t(double(target_size_) * scale);
+  }
+
+  void pyrowave_encode_device_t::watchdog_proc() {
+    bool warned = false;
+    while (!watchdog_stop_.load(std::memory_order_relaxed)) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(500));
+      const int64_t deadline = op_deadline_ms_.load(std::memory_order_relaxed);
+      if (deadline == 0) {
+        warned = false;
+        continue;
+      }
+      if (steady_ms() > deadline) {
+        if (!warned) {
+          warned = true;
+          BOOST_LOG(error) << "pyrowave: WATCHDOG: " << op_name_.load(std::memory_order_relaxed)
+                           << " has been stuck for >5s (GPU hang or encoder bug); the session is wedged."
+                           << " Set PYROWAVE_WATCHDOG_ABORT=1 to abort the process on this condition.";
+        }
+        if (std::getenv("PYROWAVE_WATCHDOG_ABORT")) {
+          BOOST_LOG(fatal) << "pyrowave: WATCHDOG: aborting (PYROWAVE_WATCHDOG_ABORT set)";
+          logging::log_flush();
+          std::abort();
+        }
+      }
+    }
   }
 
   pyrowave_encode_device_t::~pyrowave_encode_device_t() {
+    watchdog_stop_.store(true, std::memory_order_relaxed);
+    if (watchdog_.joinable()) {
+      watchdog_.join();
+    }
     try {
       if (busy_ && *fence_) {
-        (void) ctx_->device().waitForFences(*fence_, true, UINT64_MAX);
+        // Bounded: on a wedged GPU, leaking is better than hanging teardown.
+        (void) ctx_->device().waitForFences(*fence_, true, kGpuWaitNs);
       }
     } catch (...) {
     }
