@@ -272,7 +272,7 @@
             id: "advanced",
             name: "Advanced",
             options: {
-              "fec_percentage": 20,
+              "fec_percentage": 10,
               "qp": 28,
               "min_threads": 2,
               "hevc_mode": 0,
@@ -332,6 +332,16 @@
             name: "VA-API Encoder",
             options: {
               "vaapi_strict_rc_buffer": "disabled",
+            },
+          },
+          {
+            id: "pyrowave",
+            name: "PyroWave Encoder",
+            options: {
+              "pyrowave_precision": 1,
+              "pyrowave_quality_bias": 0,
+              "pyrowave_refresh_interval": 8,
+              "pyrowave_capture_cursor": "enabled",
             },
           },
           {
@@ -448,6 +458,7 @@
           'vaapi': 'Gpu',
           'vt': 'Gpu',
           'vulkan': 'Gpu',
+          'pyrowave': 'Gpu',
           'sw': 'Cpu',
         };
         return iconMap[tabId] || 'Settings';

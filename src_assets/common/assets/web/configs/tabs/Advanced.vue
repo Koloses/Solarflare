@@ -1,7 +1,6 @@
 <script setup>
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import PlatformLayout from '../../PlatformLayout.vue'
-import Checkbox from '../../Checkbox.vue'
 
 const props = defineProps([
   'platform',
@@ -10,6 +9,29 @@ const props = defineProps([
 ])
 
 const config = ref(props.config)
+
+// Selecting PyroWave as the encoder takes over the old "Force PyroWave codec"
+// checkbox: advertise only PyroWave to clients (it cannot encode H.264/HEVC/
+// AV1, so leaving those advertised would break negotiation) and reset the
+// settings below that don't apply to it. Codec-specific tuning lives in the
+// PyroWave tab.
+watch(() => config.value.encoder, (encoder, oldEncoder) => {
+  if (encoder === 'pyrowave') {
+    config.value.force_pyrowave = true
+    // PyroWave defaults: low FEC (loss heals via keep-previous + refresh).
+    config.value.fec_percentage = 10
+    // Not applicable to PyroWave; reset so stale values don't linger.
+    config.value.qp = 28
+    config.value.min_threads = 2
+    config.value.hevc_mode = 0
+    config.value.av1_mode = 0
+  }
+  else if (oldEncoder === 'pyrowave') {
+    config.value.force_pyrowave = false
+    // Restore the stock FEC default for the traditional codecs.
+    config.value.fec_percentage = 20
+  }
+})
 </script>
 
 <template>
@@ -21,22 +43,22 @@ const config = ref(props.config)
       <div class="form-text">{{ $t('config.fec_percentage_desc') }}</div>
     </div>
 
-    <!-- Quantization Parameter -->
-    <div class="mb-3">
+    <!-- Quantization Parameter (not used by PyroWave) -->
+    <div class="mb-3" v-if="config.encoder !== 'pyrowave'">
       <label for="qp" class="form-label">{{ $t('config.qp') }}</label>
       <input type="number" class="form-control" id="qp" placeholder="28" v-model="config.qp" />
       <div class="form-text">{{ $t('config.qp_desc') }}</div>
     </div>
 
-    <!-- Min Threads -->
-    <div class="mb-3">
+    <!-- Min Threads (software encoder only; not used by PyroWave) -->
+    <div class="mb-3" v-if="config.encoder !== 'pyrowave'">
       <label for="min_threads" class="form-label">{{ $t('config.min_threads') }}</label>
       <input type="number" class="form-control" id="min_threads" placeholder="2" min="1" v-model="config.min_threads" />
       <div class="form-text">{{ $t('config.min_threads_desc') }}</div>
     </div>
 
-    <!-- HEVC Support -->
-    <div class="mb-3">
+    <!-- HEVC Support (PyroWave advertises only its own codec) -->
+    <div class="mb-3" v-if="config.encoder !== 'pyrowave'">
       <label for="hevc_mode" class="form-label">{{ $t('config.hevc_mode') }}</label>
       <select id="hevc_mode" class="form-select" v-model="config.hevc_mode">
         <option value="0">{{ $t('config.hevc_mode_0') }}</option>
@@ -47,8 +69,8 @@ const config = ref(props.config)
       <div class="form-text">{{ $t('config.hevc_mode_desc') }}</div>
     </div>
 
-    <!-- AV1 Support -->
-    <div class="mb-3">
+    <!-- AV1 Support (PyroWave advertises only its own codec) -->
+    <div class="mb-3" v-if="config.encoder !== 'pyrowave'">
       <label for="av1_mode" class="form-label">{{ $t('config.av1_mode') }}</label>
       <select id="av1_mode" class="form-select" v-model="config.av1_mode">
         <option value="0">{{ $t('config.av1_mode_0') }}</option>
@@ -58,14 +80,6 @@ const config = ref(props.config)
       </select>
       <div class="form-text">{{ $t('config.av1_mode_desc') }}</div>
     </div>
-
-    <!-- Force PyroWave codec -->
-    <Checkbox class="mb-3"
-              id="force_pyrowave"
-              locale-prefix="config"
-              v-model="config.force_pyrowave"
-              default="false"
-    ></Checkbox>
 
     <!-- Capture -->
     <div class="mb-3" v-if="platform !== 'macos'">
@@ -120,8 +134,10 @@ const config = ref(props.config)
           </template>
         </PlatformLayout>
         <option value="software">{{ $t('config.encoder_software') }}</option>
+        <option value="pyrowave">PyroWave (GPU wavelet)</option>
       </select>
       <div class="form-text">{{ $t('config.encoder_desc') }}</div>
+      <div class="form-text" v-if="config.encoder === 'pyrowave'">{{ $t('config.encoder_pyrowave_note') }}</div>
     </div>
 
   </div>
