@@ -318,10 +318,11 @@ void DecoderInput::clear()
 
 void DecoderInput::resync_at_packet_boundary()
 {
-	// Fork extension: the host aligns block packets to RTP payload boundaries,
-	// so every RTP payload starts a fresh record. If we are mid-record here,
-	// the previous payload was lost in transit - drop the partial record (its
-	// block stays unregistered, so it decodes as absent) and restart cleanly.
+	// Fork extension. CAUTION: only call this at a boundary that is KNOWN to
+	// follow lost data. Records larger than one RTP payload legitimately span
+	// payload boundaries, so a mid-record state at an arbitrary payload
+	// boundary is normal - resyncing there drops every spanning record.
+	// Currently unused by the clients for exactly that reason.
 	if (header_size == 0 && packet_size == 0 && skip_size == 0)
 		return;
 	header_size = 0;
