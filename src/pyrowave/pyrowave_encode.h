@@ -116,7 +116,10 @@ namespace pyrowave_enc {
     std::vector<uint64_t> block_hashes_;  ///< per 32x32 block: hash of the last packet sent
     uint64_t frame_counter_ = 0;
     std::atomic<bool> full_refresh_ {true};  ///< next frame is a full (code-0, IDR) frame
-    uint32_t seq_mirror_ = 7;  ///< mirrors PyroWave::Encoder::sequence_count (pre-increment)
+    // Mirrors PyroWave::Encoder::sequence_count. The codec pre-increments
+    // from 0 (its first frame carries sequence 1), so start at 0 and
+    // pre-increment in convert() the same way.
+    uint32_t seq_mirror_ = 0;
     bool logged_seq_mismatch_ = false;
 
     // Adaptive budget: spend replenishment savings on quality. Changed rarely

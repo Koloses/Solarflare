@@ -702,12 +702,19 @@ namespace pyrowave_enc {
       };
       auto append_record = [&](const void *src, size_t len) {
         if (aligned) {
+          // Pad at most ONCE per record: one padding record always yields a
+          // fresh payload, and if the record still can't be placed cleanly
+          // there (e.g. len == shard - 4, whose 4-byte tail can never hold a
+          // padding record), more padding would loop forever - this exact
+          // case previously hung the encode thread. Instead, place the record
+          // anyway; the resulting misaligned boundary is skipped by the
+          // sliver logic below on the next call (one payload goes unaligned).
+          bool padded = false;
           for (;;) {
             const size_t pos = out.data.size();
             if (next_boundary < pos + 8) {
               // Sliver (< 8 bytes) or already-crossed boundary: cannot hold a
-              // padding record; that boundary stays unaligned (rare, only
-              // after an oversized record). Move to the next one.
+              // padding record; that boundary stays unaligned. Move on.
               next_boundary += shard;
               continue;
             }
@@ -718,8 +725,12 @@ namespace pyrowave_enc {
             if (len <= rem && rem - len != 4) {
               break;  // fits, and doesn't leave an un-paddable 4-byte tail
             }
+            if (padded) {
+              break;  // padding can't help this record; place it as-is
+            }
             append_padding(rem);
             next_boundary += shard;
+            padded = true;
           }
         }
         append_bytes(src, len);
