@@ -8,8 +8,8 @@
  * and own a self-contained one here. The encoder (and, by analogy, the
  * moonlight-qt decoder) drives PyroWave on this context.
  *
- * Scope note: this is the foundation for Milestone 2. It deliberately contains
- * no Sunshine capture/avcodec coupling. Built only when SUNSHINE_ENABLE_PYROWAVE.
+ * Scope note: deliberately contains no Sunshine capture/avcodec coupling.
+ * Built only when SUNSHINE_ENABLE_PYROWAVE.
  */
 #pragma once
 

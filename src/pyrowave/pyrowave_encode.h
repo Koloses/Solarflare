@@ -9,12 +9,9 @@
  * fragments it; the decoder reassembles and parses PyroWave's self-delimiting
  * block headers).
  *
- * Milestone 2 scaffold. The codec-driving core is faithful to WiVRn's
- * server/encoder/video_encoder_pyrowave.cpp, but this has NOT been compiled
- * (no Vulkan SDK in the authoring environment). Build with
- * -DSUNSHINE_ENABLE_PYROWAVE=ON on a real host. Points needing validation are
- * marked TODO. The colour-conversion upload is a CPU-staging first version;
- * zero-copy GPU interop with the capture backend is a later optimisation.
+ * The codec-driving core follows WiVRn's server/encoder/video_encoder_pyrowave.cpp.
+ * Built when -DSUNSHINE_ENABLE_PYROWAVE=ON. Capture frames arrive either as CPU
+ * BGRA (staging upload) or zero-copy via DRM-PRIME dma-buf import (Linux KMS).
  */
 #pragma once
 

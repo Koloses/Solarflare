@@ -2,10 +2,8 @@
  * @file src/pyrowave/pyrowave_vk.cpp
  * @brief Implementation of the dedicated Vulkan context for PyroWave.
  *
- * NOTE (Milestone 2 scaffold): this compiles against the vendored pyrowave
- * library's public headers. It has NOT yet been built end-to-end (the sandbox
- * that authored it has no Vulkan SDK). Validate on a real host with
- * -DSUNSHINE_ENABLE_PYROWAVE=ON. Points needing a second look are marked TODO.
+ * Compiles against the vendored pyrowave library's public headers; built only
+ * when SUNSHINE_ENABLE_PYROWAVE is ON.
  */
 #include "pyrowave_vk.h"
 
@@ -159,8 +157,7 @@ namespace pyrowave_vk {
 
       // Diagnostic toggle: PYROWAVE_NO_FP16 forces the fp32 wavelet path. The codec
       // selects fp16 vs fp32 shader variants from the ENABLED shaderFloat16 feature,
-      // so masking it here makes the codec use fp32. Used to test whether gfx1013
-      // RADV's fp16 path is the source of intermittent decode garbage.
+      // so masking it here makes the codec use fp32 (A/B precision testing).
       bool fp16_ok = qf16.shaderFloat16 && (std::getenv("PYROWAVE_NO_FP16") == nullptr);
       if (!fp16_ok && qf16.shaderFloat16) {
         BOOST_LOG(warning) << "pyrowave: PYROWAVE_NO_FP16 set -> forcing fp32 wavelet path";
@@ -239,9 +236,8 @@ namespace pyrowave_vk {
       self->compute_queue = vk::raii::Queue(self->dev, cqf, 0);
 
       // --- VMA allocator singleton (required by the codec) ------------------
-      // TODO(pyrowave): when using vulkan_raii's dynamic dispatcher, VMA needs
-      // explicit function pointers. Populate VmaVulkanFunctions from the loader
-      // (vkGetInstanceProcAddr/vkGetDeviceProcAddr) and set the matching flag.
+      // VMA needs explicit function pointers under vulkan_raii's dynamic
+      // dispatcher; it resolves the rest from these two entry points.
       VmaVulkanFunctions vma_fns {};
       vma_fns.vkGetInstanceProcAddr = self->ctx.getDispatcher()->vkGetInstanceProcAddr;
       vma_fns.vkGetDeviceProcAddr = self->dev.getDispatcher()->vkGetDeviceProcAddr;

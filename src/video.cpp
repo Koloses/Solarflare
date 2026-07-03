@@ -1266,7 +1266,7 @@ namespace video {
   int active_hevc_mode;
   int active_av1_mode;
   // PyroWave codec mode: 0 = auto, 1 = unsupported/disabled, 2 = supported (8-bit 4:2:0).
-  // Resolved during encoder probing (Milestone 2) once a PyroWave encoder is registered.
+  // Resolved during encoder probing once a PyroWave encoder is registered.
   int active_pyrowave_mode = 0;
   bool last_encoder_probe_supported_ref_frames_invalidation = false;
 
