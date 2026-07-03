@@ -1593,13 +1593,27 @@ bool Decoder::dequant(vk::raii::CommandBuffer & cmd, size_t storage_mode, bool k
 
 	if (fragment_path)
 	{
-		for (auto & b: image_barrier)
-		{
-			b.srcAccessMask = b.dstAccessMask;
-			b.oldLayout = b.newLayout;
-			b.dstAccessMask = vk::AccessFlagBits::eShaderRead;
-			b.newLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
-		}
+		// Built fresh rather than by mutating the pre-dequant barriers: the
+		// first-frame clear path declares its own barriers in its own scope,
+		// so there is no single pre-dequant barrier array to reuse here.
+		std::array image_barrier{
+		        vk::ImageMemoryBarrier{
+		                .srcAccessMask = vk::AccessFlagBits::eShaderWrite,
+		                .dstAccessMask = vk::AccessFlagBits::eShaderRead,
+		                .oldLayout = vk::ImageLayout::eGeneral,
+		                .newLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
+		                .image = img_high,
+		                .subresourceRange = whole_range,
+		        },
+		        vk::ImageMemoryBarrier{
+		                .srcAccessMask = vk::AccessFlagBits::eShaderWrite,
+		                .dstAccessMask = vk::AccessFlagBits::eShaderRead,
+		                .oldLayout = vk::ImageLayout::eGeneral,
+		                .newLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
+		                .image = img_low,
+		                .subresourceRange = whole_range,
+		        },
+		};
 		if (wavelet_img_low_res)
 		{
 			cmd.pipelineBarrier(
