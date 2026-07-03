@@ -64,11 +64,12 @@ public:
 	void clear();
 
 	// Fork extension: true when the current frame was coded with keep-previous
-	// semantics (conditional replenishment) AND honouring it is safe (a full
-	// frame has initialized the wavelet coefficient state).
+	// semantics (conditional replenishment). Always safe to honour: the
+	// decoder clears the wavelet images on the first frame, so blocks that
+	// were never received decode as zero until their first delivery.
 	bool keep_previous_frame() const
 	{
-		return keep_frame && seen_full_frame;
+		return keep_frame;
 	}
 
 	// Fork extension: true when keep-previous (code-1) frames are arriving but

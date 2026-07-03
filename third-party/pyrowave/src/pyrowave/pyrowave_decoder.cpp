@@ -1467,65 +1467,100 @@ bool Decoder::dequant(vk::raii::CommandBuffer & cmd, size_t storage_mode, bool k
 	// auto start_dequant = cmd.write_timestamp(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
 
 	// Keep-previous decoding (conditional replenishment) requires the wavelet
-	// images to retain their contents across frames, so after the first frame
-	// the transition must preserve (no eUndefined discard).
-	const auto prev_layout = wavelet_images_valid
-	        ? (fragment_path ? vk::ImageLayout::eShaderReadOnlyOptimal : vk::ImageLayout::eGeneral)
-	        : vk::ImageLayout::eUndefined;
-	const auto prev_access = wavelet_images_valid
-	        ? vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite
-	        : vk::AccessFlags{};
-	const auto prev_stage = (wavelet_images_valid && fragment_path)
-	        ? vk::PipelineStageFlagBits::eFragmentShader
-	        : vk::PipelineStageFlagBits::eComputeShader;
-	wavelet_images_valid = true;
-
-	std::array image_barrier{
-	        vk::ImageMemoryBarrier{
-	                .srcAccessMask = prev_access,
-	                .dstAccessMask = vk::AccessFlagBits::eShaderWrite,
-	                .oldLayout = prev_layout,
-	                .newLayout = vk::ImageLayout::eGeneral,
-	                .image = wavelet_img_high_res,
-	                .subresourceRange = {
-	                        .aspectMask = vk::ImageAspectFlagBits::eColor,
-	                        .levelCount = VK_REMAINING_MIP_LEVELS,
-	                        .layerCount = VK_REMAINING_ARRAY_LAYERS,
-	                },
-	        },
-	        vk::ImageMemoryBarrier{
-	                .srcAccessMask = prev_access,
-	                .dstAccessMask = vk::AccessFlagBits::eShaderWrite,
-	                .oldLayout = prev_layout,
-	                .newLayout = vk::ImageLayout::eGeneral,
-	                .image = wavelet_img_low_res,
-	                .subresourceRange = {
-	                        .aspectMask = vk::ImageAspectFlagBits::eColor,
-	                        .levelCount = VK_REMAINING_MIP_LEVELS,
-	                        .layerCount = VK_REMAINING_ARRAY_LAYERS,
-	                },
-	        },
+	// images to retain their contents across frames. On the FIRST frame they
+	// are cleared to zero, which makes keep-previous frames safe to honor
+	// immediately: a block that has never been received decodes as zero until
+	// its first delivery (the host's rolling refresh guarantees one within
+	// its interval), so NO full frame is required to initialize the state.
+	const vk::ImageSubresourceRange whole_range{
+	        .aspectMask = vk::ImageAspectFlagBits::eColor,
+	        .levelCount = VK_REMAINING_MIP_LEVELS,
+	        .layerCount = VK_REMAINING_ARRAY_LAYERS,
 	};
+	vk::Image img_high = wavelet_img_high_res;
+	vk::Image img_low = wavelet_img_low_res;
 
-	if (wavelet_img_low_res)
+	if (!wavelet_images_valid)
 	{
-		cmd.pipelineBarrier(
-		        prev_stage,
-		        vk::PipelineStageFlagBits::eComputeShader,
-		        {},
-		        {},
-		        {},
-		        image_barrier);
+		wavelet_images_valid = true;
+
+		std::array to_transfer{
+		        vk::ImageMemoryBarrier{
+		                .srcAccessMask = vk::AccessFlags{},
+		                .dstAccessMask = vk::AccessFlagBits::eTransferWrite,
+		                .oldLayout = vk::ImageLayout::eUndefined,
+		                .newLayout = vk::ImageLayout::eTransferDstOptimal,
+		                .image = img_high,
+		                .subresourceRange = whole_range,
+		        },
+		        vk::ImageMemoryBarrier{
+		                .srcAccessMask = vk::AccessFlags{},
+		                .dstAccessMask = vk::AccessFlagBits::eTransferWrite,
+		                .oldLayout = vk::ImageLayout::eUndefined,
+		                .newLayout = vk::ImageLayout::eTransferDstOptimal,
+		                .image = img_low,
+		                .subresourceRange = whole_range,
+		        },
+		};
+		if (wavelet_img_low_res)
+			cmd.pipelineBarrier(vk::PipelineStageFlagBits::eTopOfPipe, vk::PipelineStageFlagBits::eTransfer, {}, {}, {}, to_transfer);
+		else
+			cmd.pipelineBarrier(vk::PipelineStageFlagBits::eTopOfPipe, vk::PipelineStageFlagBits::eTransfer, {}, {}, {}, to_transfer[0]);
+
+		const vk::ClearColorValue zero{std::array<float, 4>{0.0f, 0.0f, 0.0f, 0.0f}};
+		cmd.clearColorImage(img_high, vk::ImageLayout::eTransferDstOptimal, zero, whole_range);
+		if (wavelet_img_low_res)
+			cmd.clearColorImage(img_low, vk::ImageLayout::eTransferDstOptimal, zero, whole_range);
+
+		std::array to_general{
+		        vk::ImageMemoryBarrier{
+		                .srcAccessMask = vk::AccessFlagBits::eTransferWrite,
+		                .dstAccessMask = vk::AccessFlagBits::eShaderWrite | vk::AccessFlagBits::eShaderRead,
+		                .oldLayout = vk::ImageLayout::eTransferDstOptimal,
+		                .newLayout = vk::ImageLayout::eGeneral,
+		                .image = img_high,
+		                .subresourceRange = whole_range,
+		        },
+		        vk::ImageMemoryBarrier{
+		                .srcAccessMask = vk::AccessFlagBits::eTransferWrite,
+		                .dstAccessMask = vk::AccessFlagBits::eShaderWrite | vk::AccessFlagBits::eShaderRead,
+		                .oldLayout = vk::ImageLayout::eTransferDstOptimal,
+		                .newLayout = vk::ImageLayout::eGeneral,
+		                .image = img_low,
+		                .subresourceRange = whole_range,
+		        },
+		};
+		if (wavelet_img_low_res)
+			cmd.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer, vk::PipelineStageFlagBits::eComputeShader, {}, {}, {}, to_general);
+		else
+			cmd.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer, vk::PipelineStageFlagBits::eComputeShader, {}, {}, {}, to_general[0]);
 	}
 	else
 	{
-		cmd.pipelineBarrier(
-		        prev_stage,
-		        vk::PipelineStageFlagBits::eComputeShader,
-		        {},
-		        {},
-		        {},
-		        image_barrier[0]);
+		const auto prev_layout = fragment_path ? vk::ImageLayout::eShaderReadOnlyOptimal : vk::ImageLayout::eGeneral;
+		const auto prev_stage = fragment_path ? vk::PipelineStageFlagBits::eFragmentShader : vk::PipelineStageFlagBits::eComputeShader;
+		std::array image_barrier{
+		        vk::ImageMemoryBarrier{
+		                .srcAccessMask = vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite,
+		                .dstAccessMask = vk::AccessFlagBits::eShaderWrite,
+		                .oldLayout = prev_layout,
+		                .newLayout = vk::ImageLayout::eGeneral,
+		                .image = img_high,
+		                .subresourceRange = whole_range,
+		        },
+		        vk::ImageMemoryBarrier{
+		                .srcAccessMask = vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite,
+		                .dstAccessMask = vk::AccessFlagBits::eShaderWrite,
+		                .oldLayout = prev_layout,
+		                .newLayout = vk::ImageLayout::eGeneral,
+		                .image = img_low,
+		                .subresourceRange = whole_range,
+		        },
+		};
+		if (wavelet_img_low_res)
+			cmd.pipelineBarrier(prev_stage, vk::PipelineStageFlagBits::eComputeShader, {}, {}, {}, image_barrier);
+		else
+			cmd.pipelineBarrier(prev_stage, vk::PipelineStageFlagBits::eComputeShader, {}, {}, {}, image_barrier[0]);
 	}
 
 	// De-quantize
