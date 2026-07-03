@@ -56,6 +56,7 @@ class DecoderInput
 	uint32_t pending_offset_u32 = 0;
 	bool keep_frame = true;  ///< current frame uses keep-previous semantics (seq code 1)
 	bool seen_full_frame = false;  ///< a code-0 (full) frame initialized the coefficient state
+	uint32_t anomaly_count = 0;  ///< see parse_anomalies()
 
 public:
 	DecoderInput(const Decoder &);
@@ -68,6 +69,16 @@ public:
 	bool keep_previous_frame() const
 	{
 		return keep_frame && seen_full_frame;
+	}
+
+	// Fork extension: running count of bitstream parse anomalies (backwards
+	// sequence, out-of-bounds or duplicate block index, unknown sequence
+	// code, dimension mismatch). Never reset; callers diff between frames
+	// and surface it in their own logs (the std::cerr messages are invisible
+	// in most client log captures).
+	uint32_t parse_anomalies() const
+	{
+		return anomaly_count;
 	}
 
 	// Fork extension: call at each RTP-payload boundary. The host aligns block
