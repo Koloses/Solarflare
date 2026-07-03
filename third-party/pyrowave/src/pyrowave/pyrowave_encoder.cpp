@@ -5,7 +5,6 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
-#include <cstring>
 #include <iostream>
 
 #include <vulkan/vulkan_raii.hpp>
@@ -17,29 +16,19 @@ using vec2 = std::array<float, 2>;
 #define XSTR(s) STR(s)
 #define STR(s) #s
 
-// WAVE32 WORKAROUND. The entropy/transform compute pipelines otherwise
-// allow/prefer subgroup size 64 (wave64). On gfx1013 (Cyan Skillfish, e.g.
-// the AMD BC-250; thin RADV) a wave64 miscompile corrupts the packed
-// bitstream: it still parses (self-consistent lengths) but the coefficients
-// decode to garbage - visible as discoloured bands / washed-out blocks on
-// ANY client. Previously this was opt-in via PYROWAVE_ENC_WAVE32, which
-// silently regressed whenever the env var was lost (service reinstall, new
-// unit file). Now auto-detected from the device name as well; the env var
-// still force-enables it on other suspect hardware, and
-// PYROWAVE_NO_ENC_WAVE32 force-disables for experiments.
-static inline bool enc_force_wave32(const char * device_name)
+// DEBUG TOGGLE: PYROWAVE_ENC_WAVE32. The entropy/transform compute pipelines
+// otherwise allow/prefer subgroup size 64 (wave64). On gfx1013 (Cyan Skillfish,
+// thin RADV) a wave64 miscompile is suspected of corrupting the packed bitstream.
+// When this env var is set, cap every encoder pipeline's max subgroup size to 32
+// (log2 5) and skip the wave64 branch in resolve_rdo, forcing wave32.
+static inline bool enc_force_wave32()
 {
-	if (std::getenv("PYROWAVE_NO_ENC_WAVE32"))
-		return false;
-	if (std::getenv("PYROWAVE_ENC_WAVE32"))
-		return true;
-	if (device_name && (strstr(device_name, "GFX1013") || strstr(device_name, "gfx1013")))
-		return true;
-	return false;
+	static const bool v = std::getenv("PYROWAVE_ENC_WAVE32") != nullptr;
+	return v;
 }
-static inline uint8_t enc_cap_max_log2_impl(bool force_wave32, uint8_t max_log2)
+static inline uint8_t enc_cap_max_log2(uint8_t max_log2)
 {
-	return force_wave32 ? std::min<uint8_t>(max_log2, 5) : max_log2;
+	return enc_force_wave32() ? std::min<uint8_t>(max_log2, 5) : max_log2;
 }
 
 // DEBUG TOGGLE: PYROWAVE_NO_FP16_MATH. The "_fp16" DWT/IDWT shader variants are a
@@ -200,15 +189,6 @@ Encoder::Encoder(vk::raii::PhysicalDevice & phys_dev, vk::raii::Device & device,
         ds_pool(make_descriptor_pool(device))
 {
 	auto [prop, prop11, prop13] = phys_dev.getProperties2<vk::PhysicalDeviceProperties2, vk::PhysicalDeviceVulkan11Properties, vk::PhysicalDeviceVulkan13Properties>();
-	const bool force_wave32 = enc_force_wave32(prop.properties.deviceName.data());
-	const auto enc_cap_max_log2 = [force_wave32](uint8_t max_log2) {
-		return enc_cap_max_log2_impl(force_wave32, max_log2);
-	};
-	if (force_wave32)
-	{
-		std::cerr << "PyroWave: forcing wave32 encoder pipelines (gfx1013 wave64 workaround; device: "
-		          << prop.properties.deviceName.data() << ")" << std::endl;
-	}
 	auto ops = prop11.subgroupSupportedOperations;
 	// A real Vulkan 1.1 driver (e.g. Tegra X1 / NVIDIA) leaves the Vulkan11Properties
 	// aggregate zeroed - the subgroup operations are in the core 1.1 struct instead.
@@ -484,12 +464,12 @@ Encoder::Encoder(vk::raii::PhysicalDevice & phys_dev, vk::raii::Device & device,
 		        .layout = *resolve_rdo_.layout,
 		};
 		pipeline_subgroup_info psi;
-		if (!force_wave32 && supports_subgroup_size_log2(prop13, true, 6, 6))
+		if (!enc_force_wave32() && supports_subgroup_size_log2(prop13, true, 6, 6))
 		{
 			block_space_subdivision = 64;
 			psi.set_subgroup_size(prop13, info, 6, 6);
 		}
-		else if (force_wave32 && supports_subgroup_size_log2(prop13, true, 5, 5))
+		else if (enc_force_wave32() && supports_subgroup_size_log2(prop13, true, 5, 5))
 		{
 			block_space_subdivision = 32;
 			psi.set_subgroup_size(prop13, info, 5, 5);
