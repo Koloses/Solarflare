@@ -1435,8 +1435,19 @@ namespace stream {
       }
 
       try {
-        // Use around 80% of 1Gbps          1Gbps            percent    ms     packet      byte
+        // Pace send bursts. The old fixed assumption (80% of 1 Gbps) fires a
+        // whole frame's shards at near-gigabit; on any slower hop (Wi-Fi, VPN,
+        // 100 Mbps port) that overflows queues and causes steady packet loss -
+        // especially destructive for high-bitrate PyroWave streams. Cap the
+        // burst rate at 4x the negotiated stream bitrate (ample headroom for
+        // FEC and jitter recovery) while never exceeding the old ceiling.
+        //                                    1Gbps            percent    ms     packet      byte
         size_t ratecontrol_packets_in_1ms = std::giga::num * 80 / 100 / 1000 / blocksize / 8;
+        {
+          // bitrate is kbps -> bytes/ms == kbps / 8; times pacing factor 4.
+          size_t bitrate_paced = (size_t) std::max<int64_t>(1, (int64_t) session->config.monitor.bitrate * 4 / 8 / (int64_t) blocksize);
+          ratecontrol_packets_in_1ms = std::min(ratecontrol_packets_in_1ms, bitrate_paced);
+        }
 
         // Send less than 64K in a single batch.
         // On Windows, batches above 64K seem to bypass SO_SNDBUF regardless of its size,
