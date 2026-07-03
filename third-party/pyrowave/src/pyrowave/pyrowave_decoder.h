@@ -71,6 +71,15 @@ public:
 		return keep_frame && seen_full_frame;
 	}
 
+	// Fork extension: true when keep-previous (code-1) frames are arriving but
+	// no full (code-0) frame has initialized the coefficient state yet. The
+	// picture is degraded (absent blocks decode to zero) until the host sends
+	// a full frame; callers should keep requesting an IDR while this holds.
+	bool awaiting_state_init() const
+	{
+		return keep_frame && !seen_full_frame;
+	}
+
 	// Fork extension: running count of bitstream parse anomalies (backwards
 	// sequence, out-of-bounds or duplicate block index, unknown sequence
 	// code, dimension mismatch). Never reset; callers diff between frames

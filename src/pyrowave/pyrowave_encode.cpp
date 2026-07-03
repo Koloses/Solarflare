@@ -684,7 +684,7 @@ namespace pyrowave_enc {
       // Adaptive bitrate (client opt-in): a refresh request after stream start
       // means unrecoverable loss - back off; otherwise creep back up.
       if (adaptive_bitrate_) {
-        if (refresh_requested && sent_initial_full_) {
+        if (refresh_requested && frame_counter_ > 0) {
           const double prev = bitrate_scale_;
           bitrate_scale_ = std::max(0.5, bitrate_scale_ * 0.8);
           if (bitrate_scale_ != prev) {
@@ -699,27 +699,12 @@ namespace pyrowave_enc {
         }
       }
 
-      bool full = !replenish;
-      if (refresh_requested) {
-        if (!sent_initial_full_ || !replenish) {
-          // Stream start (the decoder needs one code-0 frame to initialize its
-          // coefficient state), or replenishment disabled: hard full frame.
-          full = true;
-        } else {
-          // Client-requested heal: spread the re-send over a few frames so it
-          // doesn't produce one oversized frame with visibly coarser quants.
-          spread_refresh_remaining_ = kSpreadRefreshFrames;
-        }
-      }
-      int spread_slice = -1;
-      if (!full && spread_refresh_remaining_ > 0) {
-        spread_slice = kSpreadRefreshFrames - spread_refresh_remaining_;
-        spread_refresh_remaining_--;
-      }
-      if (full) {
-        sent_initial_full_ = true;
-        spread_refresh_remaining_ = 0;
-      }
+      // A refresh request always yields a hard full (code-0) frame: the
+      // requesting client may have no valid coefficient state at all (it
+      // routinely misses the stream's very first frames), and only a code-0
+      // frame can initialize it. The temporary budget boost in
+      // adaptive_target_size() keeps this frame from dipping in quality.
+      const bool full = !replenish || refresh_requested;
 
       // This frame's 3-bit sequence: read it from the first coded block
       // (fall back to the CPU mirror on a frame with no coded blocks).
@@ -755,12 +740,8 @@ namespace pyrowave_enc {
           action = present ? 1 : 0;
         } else {
           // Keep-previous frame (code 1): send only what changed, plus the
-          // rolling refresh slice (bounds staleness after packet loss) and, if
-          // a heal is in progress, this frame's spread-refresh slice.
-          bool due = (uint64_t(i) % uint64_t(refresh_interval_)) == (frame_counter_ % uint64_t(refresh_interval_));
-          if (spread_slice >= 0 && int(uint64_t(i) % uint64_t(kSpreadRefreshFrames)) == spread_slice) {
-            due = true;
-          }
+          // rolling refresh slice (bounds staleness after packet loss).
+          const bool due = (uint64_t(i) % uint64_t(refresh_interval_)) == (frame_counter_ % uint64_t(refresh_interval_));
           if (due || cur != block_hashes_[i]) {
             action = present ? 1 : 2;
           }
@@ -883,7 +864,7 @@ namespace pyrowave_enc {
       if (replenish) {
         const size_t wire = out.data.size();
         const size_t base = size_t(double(target_size_) * bitrate_scale_);
-        if (full || spread_slice >= 0) {
+        if (full) {
           // Refresh traffic is expected to be large; it says nothing about the
           // scene, so leave the budget scale and its counters alone.
           low_usage_frames_ = 0;
@@ -921,10 +902,10 @@ namespace pyrowave_enc {
 
   size_t pyrowave_encode_device_t::adaptive_target_size() const {
     double scale = budget_scale_ * bitrate_scale_;
-    if (full_refresh_.load(std::memory_order_relaxed) || spread_refresh_remaining_ > 0) {
-      // Refresh frames carry extra (re-sent) blocks; give them extra budget so
-      // the heal doesn't arrive with visibly coarser quantization. Bounded by
-      // the 4x data-buffer sizing headroom.
+    if (full_refresh_.load(std::memory_order_relaxed)) {
+      // Full-refresh frames carry every block; give them extra budget so the
+      // heal doesn't arrive with visibly coarser quantization. Bounded by the
+      // 4x data-buffer sizing headroom.
       scale = std::min(scale * 1.5, 3.0);
     }
     return size_t(double(target_size_) * scale);

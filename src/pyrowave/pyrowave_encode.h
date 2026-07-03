@@ -149,13 +149,12 @@ namespace pyrowave_enc {
     bool adaptive_bitrate_ = false;
     double bitrate_scale_ = 1.0;
 
-    // Spread refresh: a client-requested full refresh is distributed over this
-    // many frames (each frame force-sends a 1/N slice of the blocks) so the
-    // heal doesn't produce one oversized/quality-dipped frame. The stream's
-    // very first frame is still a hard full (code-0) frame.
-    static constexpr int kSpreadRefreshFrames = 4;
-    int spread_refresh_remaining_ = 0;
-    bool sent_initial_full_ = false;
+    // NB: a client-requested refresh MUST be answered with a hard full
+    // (code-0) frame: the requester may have missed the stream's initial full
+    // frame entirely (startup loss does this routinely) and code-1 keep
+    // frames can never initialize its coefficient state. An earlier "spread
+    // the refresh over N keep frames" optimization broke exactly that and
+    // left such clients permanently degraded.
 
     // Watchdog: detects a stuck encode (GPU hang or encoder bug) and logs it
     // loudly instead of silently wedging the session. PYROWAVE_WATCHDOG_ABORT=1
