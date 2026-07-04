@@ -125,7 +125,7 @@ namespace kwin {
                      << "X-KDE-Wayland-Interfaces=zkde_screencast_unstable_v1" << std::endl
                      << "Type=Application" << std::endl
                      << "Name="sv << PROJECT_FQDN << "-kwin-wayland-permission" << std::endl
-                     << "Comment=Sunshine KWin screencast permission" << std::endl
+                     << "Comment=Solarflare KWin screencast permission" << std::endl
                      << "NoDisplay=true" << std::endl;
           filestream.close();
           // Give KWin time to catch up to the new desktop file

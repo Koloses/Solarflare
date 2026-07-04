@@ -173,7 +173,7 @@ int main(int argc, char *argv[]) {
   // logging can begin at this point
   // if anything is logged prior to this point, it will appear in stdout, but not in the log viewer in the UI
   // the version should be printed to the log before anything else
-  BOOST_LOG(info) << PROJECT_NAME << " version: " << PROJECT_VERSION << " commit: " << PROJECT_VERSION_COMMIT;
+  BOOST_LOG(info) << "Solarflare version: " << PROJECT_VERSION << " commit: " << PROJECT_VERSION_COMMIT;
 
   // Log publisher metadata
   log_publisher_data();
@@ -181,6 +181,30 @@ int main(int argc, char *argv[]) {
   // Log modified_config_settings
   config::log_config_settings(config::modified_config_settings, false);
   config::modified_config_settings.clear();
+
+  // One-time migration from the pre-rebrand default file names: if the state/
+  // credentials file is the new default and absent, but a sunshine_state.json
+  // sits next to it, rename it so pairings and credentials survive the update.
+  {
+    auto migrate_legacy = [](const std::string &current) {
+      std::error_code ec;
+      std::filesystem::path cur {current};
+      if (cur.filename() != "solarflare_state.json" || std::filesystem::exists(cur, ec)) {
+        return;
+      }
+      auto legacy = cur.parent_path() / "sunshine_state.json";
+      if (std::filesystem::exists(legacy, ec)) {
+        std::filesystem::rename(legacy, cur, ec);
+        if (!ec) {
+          BOOST_LOG(info) << "Migrated "sv << legacy << " to "sv << cur;
+        } else {
+          BOOST_LOG(warning) << "Could not migrate "sv << legacy << ": "sv << ec.message();
+        }
+      }
+    };
+    migrate_legacy(config::nvhttp.file_state);
+    migrate_legacy(config::sunshine.credentials_file);
+  }
 
   if (!config::sunshine.cmd.name.empty()) {
     auto fn = cmd_to_func.find(config::sunshine.cmd.name);
@@ -302,7 +326,7 @@ int main(int argc, char *argv[]) {
     BOOST_LOG(info) << "Interrupt handler called"sv;
 
     auto task = []() {
-      BOOST_LOG(fatal) << "10 seconds passed, yet Sunshine's still running: Forcing shutdown"sv;
+      BOOST_LOG(fatal) << "10 seconds passed, yet Solarflare's still running: Forcing shutdown"sv;
       logging::log_flush();
       lifetime::debug_trap();
     };
@@ -322,7 +346,7 @@ int main(int argc, char *argv[]) {
     BOOST_LOG(info) << "Terminate handler called"sv;
 
     auto task = []() {
-      BOOST_LOG(fatal) << "10 seconds passed, yet Sunshine's still running: Forcing shutdown"sv;
+      BOOST_LOG(fatal) << "10 seconds passed, yet Solarflare's still running: Forcing shutdown"sv;
       logging::log_flush();
       lifetime::debug_trap();
     };
@@ -373,7 +397,7 @@ int main(int argc, char *argv[]) {
     BOOST_LOG(fatal) << "HTTP interface failed to initialize"sv;
 
 #ifdef _WIN32
-    BOOST_LOG(fatal) << "To relaunch Sunshine successfully, use the shortcut in the Start Menu. Do not run Sunshine.exe manually."sv;
+    BOOST_LOG(fatal) << "To relaunch Solarflare successfully, use the shortcut in the Start Menu. Do not run Sunshine.exe manually."sv;
     std::this_thread::sleep_for(10s);
 #endif
 
@@ -402,8 +426,8 @@ int main(int argc, char *argv[]) {
 #ifdef _WIN32
   // If we're using the default port and GameStream is enabled, warn the user
   if (config::sunshine.port == 47989 && is_gamestream_enabled()) {
-    BOOST_LOG(fatal) << "GameStream is still enabled in GeForce Experience! This *will* cause streaming problems with Sunshine!"sv;
-    BOOST_LOG(fatal) << "Disable GameStream on the SHIELD tab in GeForce Experience or change the Port setting on the Advanced tab in the Sunshine Web UI."sv;
+    BOOST_LOG(fatal) << "GameStream is still enabled in GeForce Experience! This *will* cause streaming problems with Solarflare!"sv;
+    BOOST_LOG(fatal) << "Disable GameStream on the SHIELD tab in GeForce Experience or change the Port setting on the Advanced tab in the Solarflare Web UI."sv;
   }
 #endif
 
