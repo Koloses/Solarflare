@@ -282,7 +282,7 @@ class Sunshine < Formula
   end
 
   service do
-    run [opt_bin/"sunshine", "~/.config/sunshine/sunshine.conf"] if OS.mac?
+    run [opt_bin/"sunshine", "~/.config/sunshine/solarflare.conf"] if OS.mac?
     name linux: "app-@PROJECT_FQDN@" if OS.linux?
   end
 

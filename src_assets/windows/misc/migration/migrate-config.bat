@@ -16,9 +16,9 @@ if exist "%OLD_DIR%\apps.json" (
     )
 )
 if exist "%OLD_DIR%\sunshine.conf" (
-    if not exist "%NEW_DIR%\sunshine.conf" (
-        move "%OLD_DIR%\sunshine.conf" "%NEW_DIR%\sunshine.conf"
-        icacls "%NEW_DIR%\sunshine.conf" /reset
+    if not exist "%NEW_DIR%\solarflare.conf" (
+        move "%OLD_DIR%\sunshine.conf" "%NEW_DIR%\solarflare.conf"
+        icacls "%NEW_DIR%\solarflare.conf" /reset
     )
 )
 if exist "%OLD_DIR%\sunshine_state.json" (

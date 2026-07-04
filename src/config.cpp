@@ -602,7 +602,7 @@ namespace config {
     {},  // Username
     {},  // Password
     {},  // Password Salt
-    platf::appdata().string() + "/sunshine.conf",  // config file
+    platf::appdata().string() + "/solarflare.conf",  // config file
     {},  // cmd args
     47989,  // Base port number
     "ipv4",  // Address family
@@ -1484,6 +1484,16 @@ namespace config {
     try {
       // Create appdata folder if it does not exist
       file_handler::make_directory(platf::appdata().string());
+
+      // Pre-rebrand migration: adopt an existing sunshine.conf if the new
+      // default has not been created yet.
+      if (fs::path cur {sunshine.config_file};
+          cur.filename() == "solarflare.conf" && !fs::exists(cur)) {
+        if (auto legacy = cur.parent_path() / "sunshine.conf"; fs::exists(legacy)) {
+          std::error_code ec;
+          fs::rename(legacy, cur, ec);
+        }
+      }
 
       // Create empty config file if it does not exist
       if (!fs::exists(sunshine.config_file)) {
