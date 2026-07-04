@@ -129,11 +129,11 @@ namespace system_tray {
   // Tray menu
   static struct tray tray = {
     .icon = TRAY_ICON,
-    .tooltip = PROJECT_NAME,
+    .tooltip = "Solarflare",
     .menu =
       (struct tray_menu[]) {
         // todo - use boost/locale to translate menu strings
-        {.text = "Open Sunshine", .cb = tray_open_ui_cb},
+        {.text = "Open Solarflare", .cb = tray_open_ui_cb},
         {.text = "-"},
         {.text = "Donate",
          .submenu =

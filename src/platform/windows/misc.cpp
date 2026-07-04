@@ -1709,7 +1709,7 @@ namespace platf {
     WCHAR hostname[256];
     if (GetHostNameW(hostname, ARRAYSIZE(hostname)) == SOCKET_ERROR) {
       BOOST_LOG(error) << "GetHostNameW() failed: "sv << WSAGetLastError();
-      return "Sunshine"s;
+      return "Solarflare"s;
     }
     return utf_utils::to_utf8(hostname);
   }
