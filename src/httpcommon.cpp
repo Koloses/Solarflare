@@ -49,7 +49,7 @@ namespace http {
 
     if (clean_slate) {
       unique_id = uuid_util::uuid_t::generate().string();
-      auto dir = std::filesystem::temp_directory_path() / "Sunshine"sv;
+      auto dir = std::filesystem::temp_directory_path() / "Solarflare"sv;
       config::nvhttp.cert = (dir / ("cert-"s + unique_id)).string();
       config::nvhttp.pkey = (dir / ("pkey-"s + unique_id)).string();
     }
