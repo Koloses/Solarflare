@@ -1514,7 +1514,7 @@ namespace config {
     // so that service instance will do the work instead.
 
     if (!config_loaded && !shortcut_launch) {
-      BOOST_LOG(fatal) << "To relaunch Solarflare successfully, use the shortcut in the Start Menu. Do not run Sunshine.exe manually."sv;
+      BOOST_LOG(fatal) << "To relaunch Solarflare successfully, use the shortcut in the Start Menu. Do not run solarflare.exe manually."sv;
       std::this_thread::sleep_for(10s);
 #else
     if (!config_loaded) {

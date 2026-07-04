@@ -10,6 +10,10 @@ foreach(dep ${SUNSHINE_TARGET_DEPENDENCIES})
     add_dependencies(sunshine ${dep})  # compile these before sunshine
 endforeach()
 
+# The built/installed binary is named solarflare (the CMake target keeps its
+# internal name); macOS .app builds override this below.
+set_target_properties(sunshine PROPERTIES OUTPUT_NAME "solarflare")
+
 # platform specific target definitions
 if(WIN32)
     include(${CMAKE_MODULE_PATH}/targets/windows.cmake)

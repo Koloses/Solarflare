@@ -1,6 +1,6 @@
 [Desktop Entry]
 Name=Solarflare (Terminal)
-Exec=sunshine
+Exec=solarflare
 Terminal=true
 Type=Application
 NoDisplay=true

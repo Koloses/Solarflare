@@ -4,8 +4,8 @@
 
 # path of the extracted AppRun
 HERE="$(dirname "$(readlink -f "${0}")")"
-SUNSHINE_PATH=/usr/bin/sunshine
-SUNSHINE_BIN_HERE=$HERE/usr/bin/sunshine
+SUNSHINE_PATH=/usr/bin/solarflare
+SUNSHINE_BIN_HERE=$HERE/usr/bin/solarflare
 SUNSHINE_SHARE_HERE=$HERE/usr/share/sunshine
 
 # Set APPDIR when running directly from the AppDir:

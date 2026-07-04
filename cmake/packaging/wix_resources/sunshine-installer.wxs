@@ -4,20 +4,20 @@
     <StandardDirectory Id="ProgramMenuFolder">
         <Component Id="ApplicationShortcutRoot" Guid="*">
             <Shortcut Id="ApplicationStartMenuShortcutRoot"
-                      Name="Sunshine"
-                      Description="Sunshine Game Stream Host"
-                      Target="[INSTALL_ROOT]sunshine.exe"
+                      Name="Solarflare"
+                      Description="Solarflare Game Stream Host"
+                      Target="[INSTALL_ROOT]solarflare.exe"
                       Arguments="--shortcut"
                       WorkingDirectory="INSTALL_ROOT"/>
             <RegistryValue Root="HKCU" Key="Software\LizardByte\Sunshine" Name="installed_root" Type="integer" Value="1" KeyPath="yes"/>
         </Component>
         <Directory Id="ProgramMenuSubfolder" Name="LizardByte">
-            <Directory Id="ProgramMenuSunshineFolder" Name="Sunshine">
+            <Directory Id="ProgramMenuSunshineFolder" Name="Solarflare">
                 <Component Id="ApplicationShortcut" Guid="*">
                     <Shortcut Id="ApplicationStartMenuShortcut"
-                              Name="Sunshine"
-                              Description="Sunshine Game Stream Host"
-                              Target="[INSTALL_ROOT]sunshine.exe"
+                              Name="Solarflare"
+                              Description="Solarflare Game Stream Host"
+                              Target="[INSTALL_ROOT]solarflare.exe"
                               Arguments="--shortcut"
                               WorkingDirectory="INSTALL_ROOT"/>
                     <RemoveFolder Id="CleanUpShortCut" Directory="ProgramMenuSunshineFolder" On="uninstall"/>

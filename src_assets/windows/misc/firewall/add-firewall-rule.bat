@@ -4,7 +4,7 @@ rem Get sunshine root directory
 for %%I in ("%~dp0\..") do set "ROOT_DIR=%%~fI"
 
 set RULE_NAME=Sunshine
-set PROGRAM_BIN="%ROOT_DIR%\sunshine.exe"
+set PROGRAM_BIN="%ROOT_DIR%\solarflare.exe"
 
 rem Add the rule
 netsh advfirewall firewall add rule name=%RULE_NAME% dir=in action=allow protocol=tcp program=%PROGRAM_BIN% enable=yes

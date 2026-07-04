@@ -5,8 +5,8 @@ if (SUNSHINE_BUILD_HOMEBREW)
 else()
     # .app build
     set_target_properties(sunshine PROPERTIES
-            OUTPUT_NAME "${CMAKE_PROJECT_NAME}"
-            MACOSX_BUNDLE_BUNDLE_NAME "${CMAKE_PROJECT_NAME}"
+            OUTPUT_NAME "Solarflare"
+            MACOSX_BUNDLE_BUNDLE_NAME "Solarflare"
             MACOSX_BUNDLE_GUI_IDENTIFIER "${PROJECT_FQDN}"
             MACOSX_BUNDLE_INFO_PLIST "${APPLE_PLIST_FILE}"
             MACOSX_BUNDLE_ICON_FILE "sunshine.icns"

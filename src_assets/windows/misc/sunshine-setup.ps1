@@ -372,7 +372,7 @@ function Invoke-SunshineIfExist {
         Write-LogMessage -Message "$Emoji $Description" -Level "Step"
     }
 
-    $SunshinePath = Join-Path $RootDir "sunshine.exe"
+    $SunshinePath = Join-Path $RootDir "solarflare.exe"
 
     if (Test-Path $SunshinePath) {
         Write-LogMessage -Message "Executing: $SunshinePath $Arguments" -Level "Information"

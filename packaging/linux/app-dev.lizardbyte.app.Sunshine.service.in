@@ -14,4 +14,4 @@ RestartSec=5s
 
 [Install]
 WantedBy=graphical-session.target
-Alias=sunshine.service
+Alias=solarflare.service
