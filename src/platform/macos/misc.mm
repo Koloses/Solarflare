@@ -10,7 +10,6 @@
 
 // standard includes
 #include <fcntl.h>
-#include <mutex>
 #include <ifaddrs.h>
 
 // platform includes
@@ -93,24 +92,7 @@ namespace platf {
       homedir = getpwuid(geteuid())->pw_dir;
     }
 
-    static std::once_flag migration_flag;
-    static fs::path config_path;
-
-    std::call_once(migration_flag, [homedir]() {
-      config_path = fs::path {homedir} / ".config/solarflare"sv;
-
-      // Pre-rebrand migration: adopt an existing 'sunshine' config directory.
-      std::error_code ec;
-      fs::path legacy_path = fs::path {homedir} / ".config/sunshine"sv;
-      if (!fs::exists(config_path, ec) && fs::exists(legacy_path, ec)) {
-        fs::rename(legacy_path, config_path, ec);
-        if (ec) {
-          config_path = legacy_path;
-        }
-      }
-    });
-
-    return config_path;
+    return fs::path {homedir} / ".config/solarflare"sv;
   }
 
   using ifaddr_t = util::safe_ptr<ifaddrs, freeifaddrs>;

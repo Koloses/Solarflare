@@ -172,32 +172,6 @@ namespace platf {
         config_path = fs::path(homedir) / ".config/solarflare"sv;
       }
 
-      // Pre-rebrand migration: if the new 'solarflare' directory does not
-      // exist yet but a sibling 'sunshine' directory does, adopt it. Rename
-      // first (cheap, atomic on the same volume), fall back to copy+delete.
-      {
-        std::error_code ec;
-        fs::path legacy_path = config_path.parent_path() / "sunshine"sv;
-        if (!fs::exists(config_path, ec) && fs::exists(legacy_path, ec)) {
-          std::cout << "Migrating config from "sv << legacy_path << " to "sv << config_path << std::endl;
-          fs::rename(legacy_path, config_path, ec);
-          if (ec) {
-            ec.clear();
-            fs::create_directories(config_path, ec);
-            if (!ec) {
-              fs::copy(legacy_path, config_path, fs::copy_options::recursive | fs::copy_options::copy_symlinks, ec);
-            }
-            if (!ec) {
-              fs::remove_all(legacy_path, ec);
-            }
-            if (ec) {
-              std::cerr << "Config migration failed: " << ec.message() << std::endl;
-              config_path = legacy_path;
-            }
-          }
-        }
-      }
-
       // migrate from the old config location if necessary
       migrate_envvar = getenv("SUNSHINE_MIGRATE_CONFIG");
       if (migrate_config && found && migrate_envvar && strcmp(migrate_envvar, "1") == 0) {

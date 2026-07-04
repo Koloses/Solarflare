@@ -182,30 +182,6 @@ int main(int argc, char *argv[]) {
   config::log_config_settings(config::modified_config_settings, false);
   config::modified_config_settings.clear();
 
-  // One-time migration from the pre-rebrand default file names: if the state/
-  // credentials file is the new default and absent, but a sunshine_state.json
-  // sits next to it, rename it so pairings and credentials survive the update.
-  {
-    auto migrate_legacy = [](const std::string &current) {
-      std::error_code ec;
-      std::filesystem::path cur {current};
-      if (cur.filename() != "solarflare_state.json" || std::filesystem::exists(cur, ec)) {
-        return;
-      }
-      auto legacy = cur.parent_path() / "sunshine_state.json";
-      if (std::filesystem::exists(legacy, ec)) {
-        std::filesystem::rename(legacy, cur, ec);
-        if (!ec) {
-          BOOST_LOG(info) << "Migrated "sv << legacy << " to "sv << cur;
-        } else {
-          BOOST_LOG(warning) << "Could not migrate "sv << legacy << ": "sv << ec.message();
-        }
-      }
-    };
-    migrate_legacy(config::nvhttp.file_state);
-    migrate_legacy(config::sunshine.credentials_file);
-  }
-
   if (!config::sunshine.cmd.name.empty()) {
     auto fn = cmd_to_func.find(config::sunshine.cmd.name);
     if (fn == std::end(cmd_to_func)) {

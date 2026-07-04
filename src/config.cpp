@@ -1485,16 +1485,6 @@ namespace config {
       // Create appdata folder if it does not exist
       file_handler::make_directory(platf::appdata().string());
 
-      // Pre-rebrand migration: adopt an existing sunshine.conf if the new
-      // default has not been created yet.
-      if (fs::path cur {sunshine.config_file};
-          cur.filename() == "solarflare.conf" && !fs::exists(cur)) {
-        if (auto legacy = cur.parent_path() / "sunshine.conf"; fs::exists(legacy)) {
-          std::error_code ec;
-          fs::rename(legacy, cur, ec);
-        }
-      }
-
       // Create empty config file if it does not exist
       if (!fs::exists(sunshine.config_file)) {
         std::ofstream {sunshine.config_file};
