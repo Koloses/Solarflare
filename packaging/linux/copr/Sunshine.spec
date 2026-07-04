@@ -455,7 +455,7 @@ fi
 %{_datadir}/applications/*.desktop
 
 # Icons
-%{_datadir}/icons/hicolor/scalable/apps/*.Sunshine.svg
+%{_datadir}/icons/hicolor/256x256/apps/*.Sunshine.png
 
 # Metainfo
 %{_datadir}/metainfo/*.metainfo.xml

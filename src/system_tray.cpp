@@ -14,10 +14,10 @@
     #define TRAY_ICON_PAUSING WEB_DIR "images/sunshine-pausing.ico"
     #define TRAY_ICON_LOCKED WEB_DIR "images/sunshine-locked.ico"
   #elif defined(__linux__) || defined(linux) || defined(__linux) || defined(__FreeBSD__)
-    #define TRAY_ICON WEB_DIR "images/logo-sunshine.svg"
-    #define TRAY_ICON_PLAYING WEB_DIR "images/sunshine-playing.svg"
-    #define TRAY_ICON_PAUSING WEB_DIR "images/sunshine-pausing.svg"
-    #define TRAY_ICON_LOCKED WEB_DIR "images/sunshine-locked.svg"
+    #define TRAY_ICON WEB_DIR "images/sunshine.png"
+    #define TRAY_ICON_PLAYING WEB_DIR "images/sunshine-playing.png"
+    #define TRAY_ICON_PAUSING WEB_DIR "images/sunshine-pausing.png"
+    #define TRAY_ICON_LOCKED WEB_DIR "images/sunshine-locked.png"
   #elif defined(__APPLE__) || defined(__MACH__)
     #define TRAY_ICON WEB_DIR "images/logo-sunshine-16.png"
     #define TRAY_ICON_PLAYING WEB_DIR "images/sunshine-playing-16.png"

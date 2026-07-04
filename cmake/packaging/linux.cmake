@@ -141,13 +141,10 @@ endif()
 set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)
 set(CPACK_RPM_PACKAGE_AUTOREQ ON)
 
-# application icon
-install(FILES "${CMAKE_SOURCE_DIR}/sunshine.svg"
-        DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/scalable/apps"
-        RENAME "${PROJECT_FQDN}.svg")
-install(FILES "${CMAKE_SOURCE_DIR}/sunshine.svg"
-        DESTINATION "${SUNSHINE_ASSETS_DIR}/web/images"
-        RENAME "logo-sunshine.svg")
+# application icon (256x256 png; the svg logo is no longer shipped)
+install(FILES "${CMAKE_SOURCE_DIR}/sunshine.png"
+        DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/256x256/apps"
+        RENAME "${PROJECT_FQDN}.png")
 
 # tray icon
 if(${SUNSHINE_TRAY} STREQUAL 1)
