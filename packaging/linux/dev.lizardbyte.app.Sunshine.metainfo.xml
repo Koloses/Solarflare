@@ -2,7 +2,7 @@
 <component type="desktop">
   <id>@PROJECT_FQDN@</id>
 
-  <name>@PROJECT_NAME@</name>
+  <name>Solarflare</name>
   <summary>@PROJECT_BRIEF_DESCRIPTION@</summary>
 
   <metadata_license>CC0-1.0</metadata_license>
@@ -26,11 +26,11 @@
   <description>
     <p>@PROJECT_LONG_DESCRIPTION@</p>
 
-    <p>NOTE: Sunshine requires additional installation steps on Flatpak.</p>
+    <p>NOTE: Solarflare requires additional installation steps on Flatpak.</p>
     <p>
       <code>flatpak run --command=additional-install.sh @PROJECT_FQDN@</code>
     </p>
-    <p>NOTE: Sunshine uses a self-signed certificate. The web browser will report it as not secure, but it is safe.</p>
+    <p>NOTE: Solarflare uses a self-signed certificate. The web browser will report it as not secure, but it is safe.</p>
   </description>
 
   <releases>

@@ -1,5 +1,5 @@
 [Desktop Entry]
-Name=@PROJECT_NAME@
+Name=Solarflare (Terminal)
 Exec=sunshine
 Terminal=true
 Type=Application

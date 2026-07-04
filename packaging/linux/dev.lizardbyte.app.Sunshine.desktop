@@ -1,12 +1,12 @@
 [Desktop Entry]
 Actions=RunInTerminal;
 Categories=RemoteAccess;Network;
-Comment=@PROJECT_DESCRIPTION@
+Comment=Self-hosted game stream host for Aurora and Moonlight
 Exec=/usr/bin/env systemctl start --u app-@PROJECT_FQDN@
 Icon=@SUNSHINE_DESKTOP_ICON@
 StartupWMClass=@PROJECT_FQDN@
-Keywords=gamestream;stream;moonlight;remote play;
-Name=@PROJECT_NAME@
+Keywords=gamestream;stream;aurora;moonlight;remote play;solarflare;
+Name=Solarflare
 Type=Application
 Version=1.0
 
