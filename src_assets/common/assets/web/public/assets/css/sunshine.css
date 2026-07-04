@@ -1017,6 +1017,17 @@ p {
     color: white;
 }
 
+.btn-solarflare {
+    background-color: #e63a2e;
+    color: white;
+}
+
+.btn-solarflare:hover,
+.btn-solarflare:focus {
+    background-color: #c72d22;
+    color: white;
+}
+
 .btn-secondary {
     background-color: var(--color-bg-muted);
     color: var(--color-text-base);

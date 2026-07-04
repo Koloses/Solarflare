@@ -63,7 +63,7 @@
           {{ $t('troubleshooting.force_close_error') }}
         </div>
         <div>
-          <button class="btn btn-warning" :disabled="closeAppPressed" @click="closeApp">
+          <button class="btn btn-solarflare" :disabled="closeAppPressed" @click="closeApp">
             <x-circle :size="18" class="icon"></x-circle>
             {{ $t('troubleshooting.force_close') }}
           </button>
@@ -80,7 +80,7 @@
           {{ $t('troubleshooting.restart_sunshine_success') }}
         </div>
         <div>
-          <button class="btn btn-warning" :disabled="restartPressed" @click="restart">
+          <button class="btn btn-solarflare" :disabled="restartPressed" @click="restart">
             <refresh-cw :size="18" class="icon"></refresh-cw>
             {{ $t('troubleshooting.restart_sunshine') }}
           </button>
@@ -101,7 +101,7 @@
           {{ $t('troubleshooting.dd_reset_error') }}
         </div>
         <div>
-          <button class="btn btn-warning" :disabled="ddResetPressed" @click="ddResetPersistence">
+          <button class="btn btn-solarflare" :disabled="ddResetPressed" @click="ddResetPersistence">
             <rotate-ccw :size="18" class="icon"></rotate-ccw>
             {{ $t('troubleshooting.dd_reset') }}
           </button>

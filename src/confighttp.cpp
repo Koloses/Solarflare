@@ -1757,7 +1757,6 @@ namespace confighttp {
     server.resource["^/apps/?$"]["GET"] = page_handler("apps.html");
     server.resource["^/clients/?$"]["GET"] = page_handler("clients.html");
     server.resource["^/config/?$"]["GET"] = page_handler("config.html");
-    server.resource["^/featured/?$"]["GET"] = page_handler("featured.html");
     server.resource["^/logout/?$"]["GET"] = page_handler("logout.html", false);
     server.resource["^/password/?$"]["GET"] = page_handler("password.html");
     server.resource["^/pin/?$"]["GET"] = page_handler("pin.html");
