@@ -77,9 +77,9 @@
     --color-text-muted: #adb5bd;
     --color-text-subtle: #6c757d;
 
-    --navbar-bg: #ffc400;
-    --navbar-text: #594400;
-    --navbar-text-muted: #7f6100;
+    --navbar-bg: #e63a2e;
+    --navbar-text: #570b05;
+    --navbar-text-muted: #7e1107;
 
     --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.3);
     --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.4), 0 2px 4px -1px rgba(0, 0, 0, 0.3);
@@ -345,9 +345,9 @@
     --color-text-muted: #6c757d;
     --color-text-subtle: #adb5bd;
 
-    --navbar-bg: #ffc400;
-    --navbar-text: #594400;
-    --navbar-text-muted: #7f6100;
+    --navbar-bg: #e63a2e;
+    --navbar-text: #570b05;
+    --navbar-text-muted: #7e1107;
 }
 
 /* Forest Theme - Green nature tones */
