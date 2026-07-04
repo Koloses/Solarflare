@@ -372,9 +372,6 @@
               <div class="form-text" v-else-if="platform === 'macos'"><b>{{ $t('apps.env_displayplacer_example') }}</b>
                 <pre>sh -c "displayplacer "id:&lt;screenId&gt; res:${SUNSHINE_CLIENT_WIDTH}x${SUNSHINE_CLIENT_HEIGHT} hz:${SUNSHINE_CLIENT_FPS} scaling:on origin:(0,0) degree:0""</pre>
               </div>
-              <div class="form-text"><a
-                  :href="`${documentationBaseUrl}/md_docs_2app__examples.html`"
-                  target="_blank">{{ $t('_common.see_more') }}</a></div>
             </div>
           </div>
           <!-- Save buttons -->
@@ -643,10 +640,6 @@
           return false;
         }
         return this.version.isGreater(this.githubVersion);
-      },
-      documentationBaseUrl() {
-        const docsVersion = this.installedVersionNotStable ? 'master' : 'latest'
-        return `https://docs.lizardbyte.dev/projects/sunshine/${docsVersion}`
       },
       displayedApps() {
         let list = this.apps.map((app, index) => ({ app, index }));

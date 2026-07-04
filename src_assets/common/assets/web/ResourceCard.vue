@@ -16,10 +16,6 @@
                   <SimpleIcon icon="GitHub" :size="18" class="icon"></SimpleIcon>
                   Aurora (Android)
                 </a>
-                <a class="btn btn-info" href="https://docs.lizardbyte.dev/projects/sunshine/latest/" target="_blank">
-                  <BookOpen :size="18" class="icon"></BookOpen>
-                  {{ $t('resource_card.documentation') }}
-                </a>
             </div>
         </div>
     </div>
@@ -47,7 +43,6 @@
 <script>
 import {
   AlertCircle,
-  BookOpen,
   FileText,
 } from '@lucide/vue'
 import SimpleIcon from './SimpleIcon.vue'
@@ -56,7 +51,6 @@ export default {
   components: {
     SimpleIcon,
     AlertCircle,
-    BookOpen,
     FileText,
   },
 }
